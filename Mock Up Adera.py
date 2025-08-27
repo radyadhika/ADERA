@@ -161,8 +161,7 @@ missing_cols = [c for c in expected_cols if c not in df.columns]
 with st.expander("🔎 Detected columns"):
     st.write(list(df.columns))
 if missing_cols:
-    with st.expander("⚠️ Missing expected columns (informational)"):
-        st.write(missing_cols)
+    pass
 
 # Convert types (only if present)
 df = add_time_parts(df)
@@ -526,6 +525,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
 
 
