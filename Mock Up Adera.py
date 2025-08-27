@@ -426,8 +426,19 @@ with tabs[4]:
                     continue
                 anom_idx = idx[np.where(scores == -1)]
                 if len(anom_idx):
-                    out = d.loc[anom_idx, ["Date","Well","Structure"] + [c for c in features if c in d.columns]].sort_values("Date")
+                    base_cols = ["Date", "Well", "Structure"]
+                    feat_cols = [c for c in features if c in d.columns]
+                    take_cols = safe_cols(d, base_cols + feat_cols)
+                    
+                    # If nothing to show, skip
+                    if not take_cols:
+                        continue
+                    
+                    out = d.loc[anom_idx, take_cols]
+                    if "Date" in out.columns:
+                        out = out.sort_values("Date")
                     results.append(out)
+                    
             if results:
                 res = pd.concat(results).sort_values(["Well","Date"])
                 st.dataframe(res)
@@ -441,7 +452,14 @@ with tabs[4]:
                 st.info("Not enough data for anomaly detection.")
             else:
                 anom_idx = idx[np.where(scores == -1)]
-                res = d.loc[anom_idx, ["Date","Well","Structure"] + feat].sort_values(["Well","Date"])
+                base_cols = ["Date", "Well", "Structure"]
+                take_cols = safe_cols(d, base_cols + feat)
+                
+                res = d.loc[anom_idx, take_cols]
+                # Sort only by columns that exist
+                sort_keys = [c for c in ["Well", "Date"] if c in res.columns]
+                if sort_keys:
+                    res = res.sort_values(sort_keys)
                 if len(res):
                     st.dataframe(res)
                 else:
@@ -498,4 +516,5 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
