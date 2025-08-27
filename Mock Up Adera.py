@@ -394,9 +394,9 @@ with tabs[1]:
 # ================= Pareto Chart Tab =================
 with tabs[2]:
     st.header("Pareto Chart")
-    st.caption("Filter by Month & Year, pick aggregation mode, and show Top N categories.")
+    st.caption("Latest test per well within selected Month & Year. Bars are stacked by Structure; line shows cumulative % by category total.")
 
-    # ---- Metric & Category selections (only show existing) ----
+    # ---- Metric & Category (only show existing) ----
     metric = st.selectbox(
         "Metric (absolute values are used for Pareto accumulation)",
         [m for m in ["Loss/Gain", "Down Time", "Act. Nett (bopd)", "Act. Gas Prod (MMscfd)"] if m in df.columns] or ["Loss/Gain"]
@@ -406,27 +406,20 @@ with tabs[2]:
         [c for c in ["Structure", "Well", "Zone", "Lifting Method"] if c in df.columns] or ["Well"]
     )
 
-    # ---- Month/Year filter ----
-    if not have("Date"):
-        st.info("Need 'Date' column for month/year filtering.")
+    if not have("Date", "Well"):
+        st.info("Need 'Date' and 'Well' columns.")
     else:
+        # ---- Month/Year selectors ----
         avail_years = sorted(df['Year'].dropna().unique(), reverse=True)
         sel_year = st.selectbox("Year", avail_years if len(avail_years) else [np.nan], key="pareto_year")
 
         months_for_year = sorted(df[df['Year'] == sel_year]['Month'].dropna().unique()) if not pd.isna(sel_year) else []
         sel_month = st.selectbox("Month", months_for_year if len(months_for_year) else [np.nan], key="pareto_month")
 
-        # ---- Aggregation scope within the selected month ----
-        agg_mode = st.radio(
-            "Aggregation mode (applied within the selected month/year)",
-            ["Latest per Well", "Sum within month"],
-            index=0, horizontal=True
-        )
-
         # ---- Top N selector ----
         top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=0)
 
-        # ---- Build filtered working frame ----
+        # ---- Filter to selected month/year ----
         work = df.copy()
         if not np.isnan(sel_year):
             work = work[work["Year"] == sel_year]
@@ -436,53 +429,90 @@ with tabs[2]:
         if work.empty or metric not in work.columns or category not in work.columns:
             st.info("No data for the selected month/year (or selected columns missing).")
         else:
-            data_pareto = work.copy()
-            if agg_mode == "Latest per Well" and "Well" in data_pareto.columns and "Date" in data_pareto.columns:
-                data_pareto = data_pareto.sort_values("Date").groupby("Well", as_index=False).last()
+            # ---- ALWAYS 'Latest per Well' within the month/year ----
+            # Keep Structure for coloring
+            keep_cols = safe_cols(work, ["Well", "Date", "Structure", category, metric])
+            data_pareto = work[keep_cols].dropna(subset=["Well", "Date"])
+            data_pareto = data_pareto.sort_values("Date").groupby("Well", as_index=False).last()
 
-            p = data_pareto[[category, metric]].dropna()
+            # Need Structure for coloring; if missing, fill with "Unknown"
+            if "Structure" not in data_pareto.columns:
+                data_pareto["Structure"] = "Unknown"
+
+            # Build table for aggregation: category, structure, abs(metric)
+            p = data_pareto[[category, "Structure", metric]].dropna()
             if p.empty:
                 st.info("No rows to aggregate after filtering.")
             else:
                 p["abs_metric"] = p[metric].abs()
-                pareto = (
+
+                # Totals per category (for ordering & cumulative %)
+                totals = (
                     p.groupby(category, as_index=False)["abs_metric"]
                      .sum()
-                     .sort_values("abs_metric", ascending=False)
+                     .rename(columns={"abs_metric": "cat_total"})
+                     .sort_values("cat_total", ascending=False)
                 )
-                total = pareto["abs_metric"].sum()
-                if total == 0:
+
+                if totals["cat_total"].sum() == 0:
                     st.info("Total is zero after filtering; nothing to plot.")
                 else:
-                    pareto["cumperc"] = 100 * pareto["abs_metric"].cumsum() / total
-
-                    # Apply Top N slice (keep cumulative % relative to ALL to show share captured by Top N)
+                    # Top N categories by total
                     if top_choice != "All":
-                        pareto_plot = pareto.head(int(top_choice))
+                        top_n = int(top_choice)
+                        top_cats = totals[category].head(top_n).tolist()
+                        totals = totals[totals[category].isin(top_cats)]
                     else:
-                        pareto_plot = pareto
+                        top_cats = totals[category].tolist()
 
-                    # ---- Plot ----
-                    fig = go.Figure()
-                    fig.add_bar(
-                        x=pareto_plot[category],
-                        y=pareto_plot["abs_metric"],
-                        name=f"{metric} contribution"
+                    # Order categories
+                    cat_order = totals[category].tolist()
+
+                    # Per-(category, structure) contributions for stacked bars
+                    by_cat_struct = (
+                        p[p[category].isin(cat_order)]
+                        .groupby([category, "Structure"], as_index=False)["abs_metric"]
+                        .sum()
                     )
+
+                    # Recompute cumulative % over ordered categories
+                    totals_ordered = totals.set_index(category).loc[cat_order].reset_index()
+                    totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / totals["cat_total"].sum()
+
+                    # ---- Plot: stacked bars by Structure, cumulative % line by category ----
+                    fig = go.Figure()
+
+                    # Add one bar trace per Structure
+                    structures = sorted(by_cat_struct["Structure"].dropna().unique().tolist())
+                    for s in structures:
+                        sub = by_cat_struct[by_cat_struct["Structure"] == s]
+                        # Align to category order; fill missing with 0
+                        y_vals = [float(sub[sub[category] == c]["abs_metric"].sum()) for c in cat_order]
+                        fig.add_bar(
+                            x=cat_order,
+                            y=y_vals,
+                            name=str(s)
+                        )
+
+                    # Cumulative % line (secondary axis)
                     fig.add_scatter(
-                        x=pareto_plot[category],
-                        y=pareto_plot["cumperc"],
+                        x=cat_order,
+                        y=totals_ordered["cumperc"],
                         name="Cumulative %",
                         yaxis="y2",
                         mode="lines+markers"
                     )
+
                     title_suffix = f"{int(sel_month)}/{int(sel_year)}" if not (np.isnan(sel_year) or len(months_for_year) == 0) else "All Data"
                     fig.update_layout(
                         title=f"Pareto of {metric} by {category} — {title_suffix}",
                         xaxis_title=category,
                         yaxis_title=f"{metric} (|value|)",
-                        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100])
+                        barmode="stack",
+                        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
+
                     safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
 
 # ================= Time Series Visualization Tab =================
@@ -628,4 +658,5 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
