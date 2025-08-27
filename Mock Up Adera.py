@@ -119,6 +119,10 @@ def add_time_parts(df: pd.DataFrame) -> pd.DataFrame:
         df["Year"] = np.nan
     return df
 
+def safe_cols(df: pd.DataFrame, cols: list[str]) -> list[str]:
+    """Return only the columns that exist in df (avoids KeyError on selection)."""
+    return [c for c in cols if c in df.columns]
+
 # =========================
 # Data load & prep
 # =========================
@@ -243,26 +247,39 @@ with tabs[0]:
                     axis=1
                 )
 
-            # Top Oil
+            # --- Top Oil ---
             st.subheader("Top Oil Producers")
             if "Act. Nett (bopd)" in stat_df.columns:
                 top_oil = stat_df.sort_values("Act. Nett (bopd)", ascending=False).head(top_n)
-                st.dataframe(top_oil[["Well", "Structure", "Act. Nett (bopd)",
-                                      "Peak Oil (bopd)" if "Peak Oil (bopd)" in top_oil.columns else "Act. Nett (bopd)",
-                                      "Well Lifespan"]])
-                fig = px.bar(top_oil, x="Well", y="Act. Nett (bopd)", color="Structure", title="Top Oil Producers")
-                safe_download_buttons_for_fig(fig, "top_oil_producers", "stat_oil")
+            
+                peak_oil_col = "Peak Oil (bopd)" if "Peak Oil (bopd)" in top_oil.columns else "Act. Nett (bopd)"
+                display_cols = safe_cols(
+                    top_oil,
+                    ["Well", "Structure", "Act. Nett (bopd)", peak_oil_col, "Well Lifespan"]
+                )
+                st.dataframe(top_oil[display_cols])
+            
+                oil_fig = px.bar(top_oil, x="Well", y="Act. Nett (bopd)", color="Structure" if "Structure" in top_oil.columns else None,
+                                 title="Top Oil Producers")
+                safe_download_buttons_for_fig(oil_fig, "top_oil_producers", "stat_oil")
             else:
                 st.info("Column 'Act. Nett (bopd)' not found.")
 
-            # Top Gas
+            # --- Top Gas ---
             st.subheader("Top Gas Producers")
             if "Act. Gas Prod (MMscfd)" in stat_df.columns:
                 top_gas = stat_df.sort_values("Act. Gas Prod (MMscfd)", ascending=False).head(top_n)
-                gas_peak_col = "Peak Gas (MMscfd)" if "Peak Gas (MMscfd)" in stat_df.columns else "Act. Gas Prod (MMscfd)"
-                st.dataframe(top_gas[["Well", "Structure", "Act. Gas Prod (MMscfd)", gas_peak_col, "Well Lifespan"]])
-                fig = px.bar(top_gas, x="Well", y="Act. Gas Prod (MMscfd)", color="Structure", title="Top Gas Producers")
-                safe_download_buttons_for_fig(fig, "top_gas_producers", "stat_gas")
+            
+                peak_gas_col = "Peak Gas (MMscfd)" if "Peak Gas (MMscfd)" in top_gas.columns else "Act. Gas Prod (MMscfd)"
+                display_cols = safe_cols(
+                    top_gas,
+                    ["Well", "Structure", "Act. Gas Prod (MMscfd)", peak_gas_col, "Well Lifespan"]
+                )
+                st.dataframe(top_gas[display_cols])
+            
+                gas_fig = px.bar(top_gas, x="Well", y="Act. Gas Prod (MMscfd)", color="Structure" if "Structure" in top_gas.columns else None,
+                                 title="Top Gas Producers")
+                safe_download_buttons_for_fig(gas_fig, "top_gas_producers", "stat_gas")
             else:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
@@ -481,3 +498,4 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
