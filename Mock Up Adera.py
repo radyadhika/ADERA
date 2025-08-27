@@ -394,42 +394,96 @@ with tabs[1]:
 # ================= Pareto Chart Tab =================
 with tabs[2]:
     st.header("Pareto Chart")
-    st.caption("Build a Pareto of cumulative contribution by a chosen category.")
+    st.caption("Filter by Month & Year, pick aggregation mode, and show Top N categories.")
 
+    # ---- Metric & Category selections (only show existing) ----
     metric = st.selectbox(
         "Metric (absolute values are used for Pareto accumulation)",
-        [m for m in ["Loss/Gain", "Down Time", "Act. Nett (bopd)", "Act. Gas Prod (MMscfd)"] if m in df.columns]
-        or ["Loss/Gain"]
+        [m for m in ["Loss/Gain", "Down Time", "Act. Nett (bopd)", "Act. Gas Prod (MMscfd)"] if m in df.columns] or ["Loss/Gain"]
     )
     category = st.selectbox(
         "Category",
-        [c for c in ["Structure", "Well", "Zone", "Lifting Method"] if c in df.columns]
-        or ["Well"]
+        [c for c in ["Structure", "Well", "Zone", "Lifting Method"] if c in df.columns] or ["Well"]
     )
 
-    agg_mode = st.radio("Aggregation mode", ["Latest per Well", "Sum over all rows"], index=0, horizontal=True)
-    data_pareto = df.copy()
-    if have("Date") and agg_mode == "Latest per Well" and "Well" in df.columns:
-        data_pareto = data_pareto.sort_values("Date").groupby("Well", as_index=False).last()
-
-    if metric not in data_pareto.columns or category not in data_pareto.columns:
-        st.info(f"Columns '{metric}' or '{category}' not found.")
+    # ---- Month/Year filter ----
+    if not have("Date"):
+        st.info("Need 'Date' column for month/year filtering.")
     else:
-        p = data_pareto[[category, metric]].dropna()
-        p["abs_metric"] = p[metric].abs()
-        pareto = p.groupby(category, as_index=False)["abs_metric"].sum().sort_values("abs_metric", ascending=False)
-        pareto["cumperc"] = 100 * pareto["abs_metric"].cumsum() / pareto["abs_metric"].sum()
+        avail_years = sorted(df['Year'].dropna().unique(), reverse=True)
+        sel_year = st.selectbox("Year", avail_years if len(avail_years) else [np.nan], key="pareto_year")
 
-        fig = go.Figure()
-        fig.add_bar(x=pareto[category], y=pareto["abs_metric"], name=f"{metric} contribution")
-        fig.add_scatter(x=pareto[category], y=pareto["cumperc"], name="Cumulative %", yaxis="y2", mode="lines+markers")
-        fig.update_layout(
-            title=f"Pareto of {metric} by {category}",
-            xaxis_title=category,
-            yaxis_title=f"{metric} (|value|)",
-            yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100])
+        months_for_year = sorted(df[df['Year'] == sel_year]['Month'].dropna().unique()) if not pd.isna(sel_year) else []
+        sel_month = st.selectbox("Month", months_for_year if len(months_for_year) else [np.nan], key="pareto_month")
+
+        # ---- Aggregation scope within the selected month ----
+        agg_mode = st.radio(
+            "Aggregation mode (applied within the selected month/year)",
+            ["Latest per Well", "Sum within month"],
+            index=0, horizontal=True
         )
-        safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
+
+        # ---- Top N selector ----
+        top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=0)
+
+        # ---- Build filtered working frame ----
+        work = df.copy()
+        if not np.isnan(sel_year):
+            work = work[work["Year"] == sel_year]
+        if len(months_for_year):
+            work = work[work["Month"] == sel_month]
+
+        if work.empty or metric not in work.columns or category not in work.columns:
+            st.info("No data for the selected month/year (or selected columns missing).")
+        else:
+            data_pareto = work.copy()
+            if agg_mode == "Latest per Well" and "Well" in data_pareto.columns and "Date" in data_pareto.columns:
+                data_pareto = data_pareto.sort_values("Date").groupby("Well", as_index=False).last()
+
+            p = data_pareto[[category, metric]].dropna()
+            if p.empty:
+                st.info("No rows to aggregate after filtering.")
+            else:
+                p["abs_metric"] = p[metric].abs()
+                pareto = (
+                    p.groupby(category, as_index=False)["abs_metric"]
+                     .sum()
+                     .sort_values("abs_metric", ascending=False)
+                )
+                total = pareto["abs_metric"].sum()
+                if total == 0:
+                    st.info("Total is zero after filtering; nothing to plot.")
+                else:
+                    pareto["cumperc"] = 100 * pareto["abs_metric"].cumsum() / total
+
+                    # Apply Top N slice (keep cumulative % relative to ALL to show share captured by Top N)
+                    if top_choice != "All":
+                        pareto_plot = pareto.head(int(top_choice))
+                    else:
+                        pareto_plot = pareto
+
+                    # ---- Plot ----
+                    fig = go.Figure()
+                    fig.add_bar(
+                        x=pareto_plot[category],
+                        y=pareto_plot["abs_metric"],
+                        name=f"{metric} contribution"
+                    )
+                    fig.add_scatter(
+                        x=pareto_plot[category],
+                        y=pareto_plot["cumperc"],
+                        name="Cumulative %",
+                        yaxis="y2",
+                        mode="lines+markers"
+                    )
+                    title_suffix = f"{int(sel_month)}/{int(sel_year)}" if not (np.isnan(sel_year) or len(months_for_year) == 0) else "All Data"
+                    fig.update_layout(
+                        title=f"Pareto of {metric} by {category} — {title_suffix}",
+                        xaxis_title=category,
+                        yaxis_title=f"{metric} (|value|)",
+                        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100])
+                    )
+                    safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
 
 # ================= Time Series Visualization Tab =================
 with tabs[3]:
@@ -574,3 +628,4 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
