@@ -123,6 +123,16 @@ def safe_cols(df: pd.DataFrame, cols: list[str]) -> list[str]:
     """Return only the columns that exist in df (avoids KeyError on selection)."""
     return [c for c in cols if c in df.columns]
 
+def rmse_score(y_true, y_pred):
+    # Backward/forward compatible RMSE
+    try:
+        # Newer sklearn
+        return mean_squared_error(y_true, y_pred, squared=False)
+    except TypeError:
+        # Older sklearn fallback
+        import numpy as np
+        return np.sqrt(mean_squared_error(y_true, y_pred))
+
 # =========================
 # Data load & prep
 # =========================
@@ -496,8 +506,8 @@ with tabs[5]:
             model = RandomForestRegressor(n_estimators=400, random_state=random_state, n_jobs=-1) if model_type == "Random Forest" else LinearRegression()
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
-            rmse = mean_squared_error(y_test, y_pred, squared=False)
-            r2 = r2_score(y_test, y_pred)
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))  # works on all versions
+            r2   = r2_score(y_test, y_pred)
 
             col1, col2 = st.columns(2)
             with col1: st.metric("RMSE (bopd)", f"{rmse:,.2f}")
@@ -516,5 +526,6 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
 
