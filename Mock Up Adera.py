@@ -430,90 +430,92 @@ with tabs[2]:
             st.info("No data for the selected month/year (or selected columns missing).")
         else:
             # ---- ALWAYS 'Latest per Well' within the month/year ----
-            # Keep Structure for coloring
+            # Keep Structure for coloring; remove duplicate columns if any (e.g., category == 'Well')
             keep_cols = safe_cols(work, ["Well", "Date", "Structure", category, metric])
-            data_pareto = work[keep_cols].dropna(subset=["Well", "Date"])
-            data_pareto = data_pareto.sort_values("Date").groupby("Well", as_index=False).last()
+            tmp = work[keep_cols]
+            tmp = tmp.loc[:, ~tmp.columns.duplicated()].copy()  # <-- dedupe columns
+
+            data_pareto = tmp.dropna(subset=["Well", "Date"]).sort_values("Date").groupby("Well", as_index=False).last()
 
             # Need Structure for coloring; if missing, fill with "Unknown"
             if "Structure" not in data_pareto.columns:
                 data_pareto["Structure"] = "Unknown"
 
             # Build table for aggregation: category, structure, abs(metric)
-            p = data_pareto[[category, "Structure", metric]].dropna()
-            if p.empty:
-                st.info("No rows to aggregate after filtering.")
+            needed = safe_cols(data_pareto, [category, "Structure", metric])
+            if len(set([category, "Structure", metric]) - set(needed)) > 0:
+                st.info("Required columns not available after filtering.")
             else:
-                p["abs_metric"] = p[metric].abs()
-
-                # Totals per category (for ordering & cumulative %)
-                totals = (
-                    p.groupby(category, as_index=False)["abs_metric"]
-                     .sum()
-                     .rename(columns={"abs_metric": "cat_total"})
-                     .sort_values("cat_total", ascending=False)
-                )
-
-                if totals["cat_total"].sum() == 0:
-                    st.info("Total is zero after filtering; nothing to plot.")
+                p = data_pareto[needed].dropna()
+                if p.empty:
+                    st.info("No rows to aggregate after filtering.")
                 else:
-                    # Top N categories by total
-                    if top_choice != "All":
-                        top_n = int(top_choice)
-                        top_cats = totals[category].head(top_n).tolist()
-                        totals = totals[totals[category].isin(top_cats)]
-                    else:
-                        top_cats = totals[category].tolist()
+                    p["abs_metric"] = p[metric].abs()
 
-                    # Order categories
-                    cat_order = totals[category].tolist()
-
-                    # Per-(category, structure) contributions for stacked bars
-                    by_cat_struct = (
-                        p[p[category].isin(cat_order)]
-                        .groupby([category, "Structure"], as_index=False)["abs_metric"]
-                        .sum()
+                    # Totals per category (for ordering & cumulative %)
+                    totals = (
+                        p.groupby(category, as_index=False)["abs_metric"]
+                         .sum()
+                         .rename(columns={"abs_metric": "cat_total"})
+                         .sort_values("cat_total", ascending=False)
                     )
 
-                    # Recompute cumulative % over ordered categories
-                    totals_ordered = totals.set_index(category).loc[cat_order].reset_index()
-                    totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / totals["cat_total"].sum()
+                    if totals["cat_total"].sum() == 0:
+                        st.info("Total is zero after filtering; nothing to plot.")
+                    else:
+                        # Top N categories by total
+                        if top_choice != "All":
+                            top_n = int(top_choice)
+                            top_cats = totals[category].head(top_n).tolist()
+                            totals = totals[totals[category].isin(top_cats)]
+                        else:
+                            top_cats = totals[category].tolist()
 
-                    # ---- Plot: stacked bars by Structure, cumulative % line by category ----
-                    fig = go.Figure()
+                        # Order categories
+                        cat_order = totals[category].tolist()
 
-                    # Add one bar trace per Structure
-                    structures = sorted(by_cat_struct["Structure"].dropna().unique().tolist())
-                    for s in structures:
-                        sub = by_cat_struct[by_cat_struct["Structure"] == s]
-                        # Align to category order; fill missing with 0
-                        y_vals = [float(sub[sub[category] == c]["abs_metric"].sum()) for c in cat_order]
-                        fig.add_bar(
-                            x=cat_order,
-                            y=y_vals,
-                            name=str(s)
+                        # Per-(category, structure) contributions for stacked bars
+                        by_cat_struct = (
+                            p[p[category].isin(cat_order)]
+                            .groupby([category, "Structure"], as_index=False)["abs_metric"]
+                            .sum()
                         )
 
-                    # Cumulative % line (secondary axis)
-                    fig.add_scatter(
-                        x=cat_order,
-                        y=totals_ordered["cumperc"],
-                        name="Cumulative %",
-                        yaxis="y2",
-                        mode="lines+markers"
-                    )
+                        # Cumulative % over ordered categories (relative to ALL shown categories)
+                        totals_ordered = totals.set_index(category).loc[cat_order].reset_index()
+                        totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / totals["cat_total"].sum()
 
-                    title_suffix = f"{int(sel_month)}/{int(sel_year)}" if not (np.isnan(sel_year) or len(months_for_year) == 0) else "All Data"
-                    fig.update_layout(
-                        title=f"Pareto of {metric} by {category} — {title_suffix}",
-                        xaxis_title=category,
-                        yaxis_title=f"{metric} (|value|)",
-                        barmode="stack",
-                        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                    )
+                        # ---- Plot: stacked bars by Structure, cumulative % line by category ----
+                        fig = go.Figure()
 
-                    safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
+                        # Add one bar trace per Structure
+                        structures = sorted(by_cat_struct["Structure"].dropna().unique().tolist())
+                        for s in structures:
+                            sub = by_cat_struct[by_cat_struct["Structure"] == s]
+                            # Align to category order; fill missing with 0
+                            y_vals = [float(sub[sub[category] == c]["abs_metric"].sum()) for c in cat_order]
+                            fig.add_bar(x=cat_order, y=y_vals, name=str(s))
+
+                        # Cumulative % line (secondary axis)
+                        fig.add_scatter(
+                            x=cat_order,
+                            y=totals_ordered["cumperc"],
+                            name="Cumulative %",
+                            yaxis="y2",
+                            mode="lines+markers"
+                        )
+
+                        title_suffix = f"{int(sel_month)}/{int(sel_year)}" if not (np.isnan(sel_year) or len(months_for_year) == 0) else "All Data"
+                        fig.update_layout(
+                            title=f"Pareto of {metric} by {category} — {title_suffix}",
+                            xaxis_title=category,
+                            yaxis_title=f"{metric} (|value|)",
+                            barmode="stack",
+                            yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                        )
+
+                        safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
 
 # ================= Time Series Visualization Tab =================
 with tabs[3]:
@@ -658,5 +660,6 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
 
