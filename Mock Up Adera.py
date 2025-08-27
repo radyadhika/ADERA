@@ -430,23 +430,33 @@ with tabs[2]:
             st.info("No data for the selected month/year (or selected columns missing).")
         else:
             # ---- ALWAYS 'Latest per Well' within the month/year ----
-            # Keep Structure for coloring; remove duplicate columns if any (e.g., category == 'Well')
-            keep_cols = safe_cols(work, ["Well", "Date", "Structure", category, metric])
-            tmp = work[keep_cols]
-            tmp = tmp.loc[:, ~tmp.columns.duplicated()].copy()  # <-- dedupe columns
+            # Build column list and make it UNIQUE to avoid non-1D grouper errors
+            base_cols = ["Well", "Date", "Structure", category, metric]
+            # keep only those that exist
+            keep_cols = [c for c in base_cols if c in work.columns]
+            # drop duplicates while preserving order
+            keep_cols = list(dict.fromkeys(keep_cols))
 
+            tmp = work[keep_cols].copy()
+            tmp = tmp.loc[:, ~tmp.columns.duplicated()].copy()  # ensure unique columns
+
+            # latest per well
             data_pareto = tmp.dropna(subset=["Well", "Date"]).sort_values("Date").groupby("Well", as_index=False).last()
 
-            # Need Structure for coloring; if missing, fill with "Unknown"
             if "Structure" not in data_pareto.columns:
                 data_pareto["Structure"] = "Unknown"
 
-            # Build table for aggregation: category, structure, abs(metric)
-            needed = safe_cols(data_pareto, [category, "Structure", metric])
-            if len(set([category, "Structure", metric]) - set(needed)) > 0:
+            # prepare mini table for aggregation: [category, Structure, metric]
+            cols_needed = [category, "Structure", metric]
+            # ensure unique + present
+            cols_needed = [c for c in list(dict.fromkeys(cols_needed)) if c in data_pareto.columns]
+            p = data_pareto[cols_needed].copy()
+            p = p.loc[:, ~p.columns.duplicated()].copy()
+
+            if category not in p.columns or metric not in p.columns:
                 st.info("Required columns not available after filtering.")
             else:
-                p = data_pareto[needed].dropna()
+                p = p.dropna(subset=[category, metric])
                 if p.empty:
                     st.info("No rows to aggregate after filtering.")
                 else:
@@ -460,7 +470,8 @@ with tabs[2]:
                          .sort_values("cat_total", ascending=False)
                     )
 
-                    if totals["cat_total"].sum() == 0:
+                    grand_total = totals["cat_total"].sum()
+                    if grand_total == 0:
                         st.info("Total is zero after filtering; nothing to plot.")
                     else:
                         # Top N categories by total
@@ -475,28 +486,29 @@ with tabs[2]:
                         cat_order = totals[category].tolist()
 
                         # Per-(category, structure) contributions for stacked bars
+                        # If Structure column not in p (should be), create placeholder
+                        if "Structure" not in p.columns:
+                            p["Structure"] = "Unknown"
+
                         by_cat_struct = (
                             p[p[category].isin(cat_order)]
                             .groupby([category, "Structure"], as_index=False)["abs_metric"]
                             .sum()
                         )
 
-                        # Cumulative % over ordered categories (relative to ALL shown categories)
+                        # Cumulative % over ordered categories
                         totals_ordered = totals.set_index(category).loc[cat_order].reset_index()
-                        totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / totals["cat_total"].sum()
+                        totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
 
                         # ---- Plot: stacked bars by Structure, cumulative % line by category ----
                         fig = go.Figure()
 
-                        # Add one bar trace per Structure
                         structures = sorted(by_cat_struct["Structure"].dropna().unique().tolist())
                         for s in structures:
                             sub = by_cat_struct[by_cat_struct["Structure"] == s]
-                            # Align to category order; fill missing with 0
-                            y_vals = [float(sub[sub[category] == c]["abs_metric"].sum()) for c in cat_order]
+                            y_vals = [float(sub.loc[sub[category] == c, "abs_metric"].sum()) for c in cat_order]
                             fig.add_bar(x=cat_order, y=y_vals, name=str(s))
 
-                        # Cumulative % line (secondary axis)
                         fig.add_scatter(
                             x=cat_order,
                             y=totals_ordered["cumperc"],
@@ -516,7 +528,7 @@ with tabs[2]:
                         )
 
                         safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
-
+                        
 # ================= Time Series Visualization Tab =================
 with tabs[3]:
     st.header("Time Series Visualization")
@@ -660,6 +672,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
 
 
