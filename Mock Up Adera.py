@@ -295,52 +295,101 @@ with tabs[0]:
 # ================= Rate Change Alerts Tab =================
 with tabs[1]:
     st.header("Rate Change Alerts")
-    st.caption("Compares the latest two tests per well and flags significant changes.")
+    st.caption("Filters by date range, then compares the latest two tests per well inside that range.")
 
     if not have("Well", "Date"):
         st.info("Need 'Well' and 'Date' columns.")
     else:
-        wells = sorted(df['Well'].dropna().unique())
-        min_points = st.slider("Minimum data points per well", 2, 10, 2)
-        pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
-
-        alerts = []
-        for w in wells:
-            d = df[df['Well'] == w].sort_values('Date')
-            if len(d) < min_points:
-                continue
-            last = d.iloc[-1]
-            prev = d.iloc[-2]
-
-            def pct_change(a, b):
-                if pd.isna(a) or pd.isna(b) or b == 0:
-                    return np.nan
-                return 100.0 * (a - b) / abs(b)
-
-            oil_pct = pct_change(last.get("Act. Nett (bopd)"), prev.get("Act. Nett (bopd)"))
-            gas_pct = pct_change(last.get("Act. Gas Prod (MMscfd)"), prev.get("Act. Gas Prod (MMscfd)"))
-
-            flag = (not pd.isna(oil_pct) and abs(oil_pct) >= pct_threshold) or \
-                   (not pd.isna(gas_pct) and abs(gas_pct) >= pct_threshold)
-
-            if flag:
-                alerts.append({
-                    "Well": w,
-                    "Structure": last.get("Structure", np.nan),
-                    "Prev Date": prev.get("Date", np.nan),
-                    "Last Date": last.get("Date", np.nan),
-                    "Oil Δ%": oil_pct,
-                    "Gas Δ%": gas_pct,
-                    "Lifting Method": last.get("Lifting Method", np.nan),
-                    "Pump Eff (%)": last.get("Pump Eff (%)", np.nan),
-                    "Choke": last.get("Choke", np.nan),
-                })
-
-        if alerts:
-            alert_df = pd.DataFrame(alerts).sort_values("Last Date", ascending=False)
-            st.dataframe(alert_df)
+        # --- Date range filter (inclusive) ---
+        dmin = pd.to_datetime(df["Date"], errors="coerce").min()
+        dmax = pd.to_datetime(df["Date"], errors="coerce").max()
+        if pd.isna(dmin) or pd.isna(dmax):
+            st.info("No valid dates found in 'Date' column.")
         else:
-            st.success("No wells crossed the threshold based on the latest two tests.")
+            start_date, end_date = st.date_input(
+                "Select start & end date (inclusive)",
+                value=(dmin.date(), dmax.date())
+            )
+            if start_date > end_date:
+                st.warning("Start date must be <= end date.")
+            else:
+                wells = sorted(df['Well'].dropna().unique())
+                min_points = st.slider("Minimum data points per well (within selected date range)", 2, 10, 2)
+                pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
+
+                # Helper
+                def pct_change(a, b):
+                    if pd.isna(a) or pd.isna(b) or b == 0:
+                        return np.nan
+                    return 100.0 * (a - b) / abs(b)
+
+                # Build mask once
+                date_mask = (df["Date"].dt.date >= start_date) & (df["Date"].dt.date <= end_date)
+
+                alerts = []
+                for w in wells:
+                    d = df[(df['Well'] == w) & date_mask].sort_values('Date')
+                    if len(d) < min_points:
+                        continue
+
+                    # last 2 inside the selected range
+                    last = d.iloc[-1]
+                    prev = d.iloc[-2]
+
+                    # Grab values (may be NaN if columns don’t exist)
+                    last_oil = last.get("Act. Nett (bopd)")
+                    prev_oil = prev.get("Act. Nett (bopd)")
+                    last_gas = last.get("Act. Gas Prod (MMscfd)")
+                    prev_gas = prev.get("Act. Gas Prod (MMscfd)")
+                    last_choke = last.get("Choke")
+                    prev_choke = prev.get("Choke")
+
+                    oil_pct = pct_change(last_oil, prev_oil)
+                    gas_pct = pct_change(last_gas, prev_gas)
+                    choke_pct = pct_change(last_choke, prev_choke)  # shown for info
+
+                    # Use same flag logic as before (oil/gas only)
+                    flag = (not pd.isna(oil_pct) and abs(oil_pct) >= pct_threshold) or \
+                           (not pd.isna(gas_pct) and abs(gas_pct) >= pct_threshold)
+
+                    if flag:
+                        alerts.append({
+                            "Well": w,
+                            "Structure": last.get("Structure", np.nan),
+                            "Prev Date": prev.get("Date", np.nan),
+                            "Last Date": last.get("Date", np.nan),
+
+                            # --- Oil ---
+                            "Prev Oil (bopd)": prev_oil,
+                            "Last Oil (bopd)": last_oil,
+                            "Oil Δ%": oil_pct,
+
+                            # --- Gas ---
+                            "Prev Gas (MMscfd)": prev_gas,
+                            "Last Gas (MMscfd)": last_gas,
+                            "Gas Δ%": gas_pct,
+
+                            # --- Choke ---
+                            "Prev Choke": prev_choke,
+                            "Last Choke": last_choke,
+                            "Choke Δ%": choke_pct,
+
+                            # Contextual fields (optional)
+                            "Lifting Method": last.get("Lifting Method", np.nan),
+                            "Pump Eff (%)": last.get("Pump Eff (%)", np.nan),
+                        })
+
+                if alerts:
+                    alert_df = pd.DataFrame(alerts)
+
+                    # Sort by latest date if present
+                    if "Last Date" in alert_df.columns:
+                        alert_df = alert_df.sort_values("Last Date", ascending=False)
+
+                    st.dataframe(alert_df)
+                else:
+                    st.success("No wells crossed the threshold based on the latest two tests in the selected date range.")
+
 
 # ================= Pareto Chart Tab =================
 with tabs[2]:
@@ -525,6 +574,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+
 
 
 
