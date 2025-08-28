@@ -394,12 +394,11 @@ with tabs[1]:
 # ================= Pareto Chart Tab =================
 with tabs[2]:
     st.header("Pareto Chart")
-    st.caption("Latest test per well within selected Month & Year. Bars are stacked by Structure; line shows cumulative % by category total.")
 
     # ---- Metric & Category (only show existing) ----
     metric = st.selectbox(
         "Metric (absolute values are used for Pareto accumulation)",
-        [m for m in ["Loss/Gain", "Down Time", "Act. Nett (bopd)", "Act. Gas Prod (MMscfd)"] if m in df.columns] or ["Loss/Gain"]
+        [m for m in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Down Time"] if m in df.columns] or ["Act. Nett (bopd)"]
     )
     category = st.selectbox(
         "Category",
@@ -417,7 +416,7 @@ with tabs[2]:
         sel_month = st.selectbox("Month", months_for_year if len(months_for_year) else [np.nan], key="pareto_month")
 
         # ---- Top N selector ----
-        top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=0)
+        top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=3)
 
         # ---- Filter to selected month/year ----
         work = df.copy()
@@ -677,6 +676,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
