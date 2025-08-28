@@ -402,7 +402,7 @@ with tabs[2]:
     )
     category = st.selectbox(
         "Category",
-        [c for c in ["Structure", "Well", "Zone", "Lifting Method"] if c in df.columns] or ["Well"]
+        [c for c in ["Well", "Structure", "Zone", "Lifting Method"] if c in df.columns] or ["Well"]
     )
 
     if not have("Date", "Well"):
@@ -676,6 +676,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
