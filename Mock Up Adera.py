@@ -680,6 +680,3 @@ st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
 
 
 
-
-
-
