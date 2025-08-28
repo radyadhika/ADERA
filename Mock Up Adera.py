@@ -676,7 +676,8 @@ with tabs[5]:
 # =========================
 # Footer
 # =========================
-st.caption("Tip: If PNG download fails, install 'kaleido' (`pip install kaleido`).")
+st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
