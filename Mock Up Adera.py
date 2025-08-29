@@ -294,11 +294,7 @@ with tabs[0]:
 
 # ================= Rate Change Alerts Tab (UPDATED — No min points; compare latest-in-range vs previous overall, optional Recover filter) =================
 with tabs[1]:
-    st.header("Rate Change Alerts — Oil & Gas")
-    st.caption(
-        "For each well that has at least one test inside the selected window, we take the latest test in-window "
-        "and compare it to the immediately previous test (which may be before the window). Split into Oil and Gas tables."
-    )
+    st.header("Rate Change Alerts")
 
     if not have("Well", "Date"):
         st.info("Need 'Well' and 'Date' columns.")
@@ -762,6 +758,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
