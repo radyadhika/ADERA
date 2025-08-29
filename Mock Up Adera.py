@@ -292,10 +292,13 @@ with tabs[0]:
             else:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
-# ================= Rate Change Alerts Tab =================
+# ================= Rate Change Alerts Tab (UPDATED) =================
 with tabs[1]:
-    st.header("Rate Change Alerts")
-    st.caption("Filters by date range, then compares the latest two tests per well inside that range.")
+    st.header("Rate Change Alerts — Oil & Gas")
+    st.caption(
+        "Filters by date range, then compares the latest two tests per well inside that range. "
+        "Now split into Oil and Gas tables, with percent or absolute thresholds."
+    )
 
     if not have("Well", "Date"):
         st.info("Need 'Well' and 'Date' columns.")
@@ -314,19 +317,50 @@ with tabs[1]:
                 st.warning("Start date must be <= end date.")
             else:
                 wells = sorted(df['Well'].dropna().unique())
-                min_points = st.slider("Minimum data points per well (within selected date range)", 2, 10, 2)
-                pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
+                min_points = st.slider(
+                    "Minimum data points per well (within selected date range)", 2, 10, 2
+                )
 
-                # Helper
+                # --- Threshold options ---
+                st.subheader("Threshold Settings")
+                threshold_mode = st.radio(
+                    "Choose threshold type",
+                    ["Percent (%)", "Absolute"],
+                    index=0,
+                    horizontal=True,
+                )
+
+                if threshold_mode == "Percent (%)":
+                    pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
+                    oil_abs_threshold = None
+                    gas_abs_threshold = None
+                else:
+                    st.caption("Absolute thresholds use original units: bopd for oil, MMscfd for gas.")
+                    oil_abs_threshold = st.number_input(
+                        "Oil absolute change threshold (bopd)", value=50.0, min_value=0.0, step=10.0
+                    )
+                    gas_abs_threshold = st.number_input(
+                        "Gas absolute change threshold (MMscfd)", value=0.2, min_value=0.0, step=0.05
+                    )
+                    pct_threshold = None
+
+                # Helper funcs
                 def pct_change(a, b):
                     if pd.isna(a) or pd.isna(b) or b == 0:
                         return np.nan
                     return 100.0 * (a - b) / abs(b)
 
+                def abs_change(a, b):
+                    if pd.isna(a) or pd.isna(b):
+                        return np.nan
+                    return a - b
+
                 # Build mask once
                 date_mask = (df["Date"].dt.date >= start_date) & (df["Date"].dt.date <= end_date)
 
-                alerts = []
+                oil_alerts = []
+                gas_alerts = []
+
                 for w in wells:
                     d = df[(df['Well'] == w) & date_mask].sort_values('Date')
                     if len(d) < min_points:
@@ -344,52 +378,78 @@ with tabs[1]:
                     last_choke = last.get("Choke")
                     prev_choke = prev.get("Choke")
 
+                    # Changes
                     oil_pct = pct_change(last_oil, prev_oil)
                     gas_pct = pct_change(last_gas, prev_gas)
-                    choke_pct = pct_change(last_choke, prev_choke)  # shown for info
+                    choke_pct = pct_change(last_choke, prev_choke)
 
-                    # Use same flag logic as before (oil/gas only)
-                    flag = (not pd.isna(oil_pct) and abs(oil_pct) >= pct_threshold) or \
-                           (not pd.isna(gas_pct) and abs(gas_pct) >= pct_threshold)
+                    oil_abs = abs_change(last_oil, prev_oil)
+                    gas_abs = abs_change(last_gas, prev_gas)
 
-                    if flag:
-                        alerts.append({
-                            "Well": w,
-                            "Structure": last.get("Structure", np.nan),
-                            "Prev Date": prev.get("Date", np.nan),
-                            "Last Date": last.get("Date", np.nan),
+                    # Flagging logic per mode
+                    if threshold_mode == "Percent (%)":
+                        oil_flag = (not pd.isna(oil_pct)) and abs(oil_pct) >= pct_threshold
+                        gas_flag = (not pd.isna(gas_pct)) and abs(gas_pct) >= pct_threshold
+                    else:
+                        oil_flag = (not pd.isna(oil_abs)) and abs(oil_abs) >= float(oil_abs_threshold)
+                        gas_flag = (not pd.isna(gas_abs)) and abs(gas_abs) >= float(gas_abs_threshold)
 
-                            # --- Oil ---
+                    base_row = {
+                        "Well": w,
+                        "Structure": last.get("Structure", np.nan),
+                        "Prev Date": prev.get("Date", np.nan),
+                        "Last Date": last.get("Date", np.nan),
+                        # Context
+                        "Lifting Method": last.get("Lifting Method", np.nan),
+                        "Pump Eff (%)": last.get("Pump Eff (%)", np.nan),
+                        # Choke info
+                        "Prev Choke": prev_choke,
+                        "Last Choke": last_choke,
+                        "Choke Δ%": choke_pct,
+                    }
+
+                    if oil_flag:
+                        oil_row = base_row.copy()
+                        oil_row.update({
                             "Prev Oil (bopd)": prev_oil,
                             "Last Oil (bopd)": last_oil,
-                            "Oil Δ%": oil_pct,
+                            "Oil Δ": oil_abs if threshold_mode == "Absolute" else oil_pct,
+                            "Δ Type": "abs (bopd)" if threshold_mode == "Absolute" else "%",
+                        })
+                        oil_alerts.append(oil_row)
 
-                            # --- Gas ---
+                    if gas_flag:
+                        gas_row = base_row.copy()
+                        gas_row.update({
                             "Prev Gas (MMscfd)": prev_gas,
                             "Last Gas (MMscfd)": last_gas,
-                            "Gas Δ%": gas_pct,
-
-                            # --- Choke ---
-                            "Prev Choke": prev_choke,
-                            "Last Choke": last_choke,
-                            "Choke Δ%": choke_pct,
-
-                            # Contextual fields (optional)
-                            "Lifting Method": last.get("Lifting Method", np.nan),
-                            "Pump Eff (%)": last.get("Pump Eff (%)", np.nan),
+                            "Gas Δ": gas_abs if threshold_mode == "Absolute" else gas_pct,
+                            "Δ Type": "abs (MMscfd)" if threshold_mode == "Absolute" else "%",
                         })
+                        gas_alerts.append(gas_row)
 
-                if alerts:
-                    alert_df = pd.DataFrame(alerts)
+                # --- Render tables ---
+                col_oil, col_gas = st.columns(2)
 
-                    # Sort by latest date if present
-                    if "Last Date" in alert_df.columns:
-                        alert_df = alert_df.sort_values("Last Date", ascending=False)
+                with col_oil:
+                    st.subheader("Oil Alerts")
+                    if oil_alerts:
+                        oil_df = pd.DataFrame(oil_alerts)
+                        if "Last Date" in oil_df.columns:
+                            oil_df = oil_df.sort_values("Last Date", ascending=False)
+                        st.dataframe(oil_df)
+                    else:
+                        st.success("No oil wells crossed the threshold based on the latest two tests in the selected date range.")
 
-                    st.dataframe(alert_df)
-                else:
-                    st.success("No wells crossed the threshold based on the latest two tests in the selected date range.")
-
+                with col_gas:
+                    st.subheader("Gas Alerts")
+                    if gas_alerts:
+                        gas_df = pd.DataFrame(gas_alerts)
+                        if "Last Date" in gas_df.columns:
+                            gas_df = gas_df.sort_values("Last Date", ascending=False)
+                        st.dataframe(gas_df)
+                    else:
+                        st.success("No gas wells crossed the threshold based on the latest two tests in the selected date range.")
 
 # ================= Pareto Chart Tab =================
 with tabs[2]:
@@ -676,6 +736,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
