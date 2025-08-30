@@ -2,7 +2,6 @@
 # Radya Evandhika Novaldi
 # Jr. Engineer Petroleum - Zona 4
 # --------------------------------------------------------------
-# Library
 import re
 import streamlit as st
 import pandas as pd
@@ -247,22 +246,6 @@ tabs = st.tabs([
 # Helper: guard for required cols
 def have(*cols):
     return all(c in df.columns for c in cols)
-
-# === after df is created (right after coerce_numeric / add_time_parts is fine) ===
-def _active_colorway():
-    try:
-        templ = pio.templates.default
-        templ = templ[0] if isinstance(templ, (list, tuple)) else templ
-        return list(pio.templates[templ].layout.colorway)
-    except Exception:
-        return list(px.colors.qualitative.Plotly)
-
-STRUCT_COLOR = {}
-if "Structure" in df.columns:
-    seq = _active_colorway()
-    # first-appearance order => matches Plotly Express behavior
-    structs = pd.unique(df["Structure"].dropna().astype(str))
-    STRUCT_COLOR = {s: seq[i % len(seq)] for i, s in enumerate(structs)}
 
 # ==== DROP-IN REPLACEMENT: Statistics tab (auto-select latest month) ====
 with tabs[0]:
@@ -658,9 +641,18 @@ with tabs[2]:
 
             title_suffix = f"{int(sel_month)}/{int(sel_year)}" if len(months_for_year) else "All Data"
 
-            def _build_and_plot_pareto(p: pd.DataFrame, y_title: str, title: str):
-                # Prepare totals
-                p = p.dropna(subset=["cat_key", "abs_metric"])
+            if metric == "Down Time":
+                 # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
+                # Tip: choose Category = 'Well' to see total downtime hours per well in the month.
+                
+                # If the chosen category is "Structure", don't stack by Structure again.
+                stack_col = "Structure" if (category != "Structure" and "Structure" in work.columns) else None
+                sel_cols = [category, metric] + ([stack_col] if stack_col else [])
+                p = work[sel_cols].dropna(subset=[category, metric]).copy()
+                p = p.loc[:, ~p.columns.duplicated()].copy()
+                p = p.rename(columns={category: "cat_key"})
+                p["abs_metric"] = p[metric].abs()
+                
                 totals = (
                     p.groupby("cat_key", as_index=False)["abs_metric"]
                      .sum()
@@ -668,89 +660,58 @@ with tabs[2]:
                      .sort_values("cat_total", ascending=False)
                 )
                 grand_total = totals["cat_total"].sum()
+                
                 if grand_total == 0:
                     st.info("Total is zero after filtering; nothing to plot.")
-                    return
-
-                # Top N filter
-                if top_choice != "All":
-                    top_n = int(top_choice)
-                    top_cats = totals["cat_key"].head(top_n).tolist()
-                    totals = totals[totals["cat_key"].isin(top_cats)]
-                cat_order = totals["cat_key"].tolist()
-
-                fig = go.Figure()
-
-                # Stack by Structure only if category != "Structure"
-                stack_col = "Structure" if ("Structure" in p.columns and category != "Structure") else None
-                if stack_col:
-                    by_cat_stack = (
-                        p[p["cat_key"].isin(cat_order)]
-                         .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
-                         .sum()
-                    )
-                    structs_present = [
-                        s for s in STRUCT_COLOR.keys()
-                        if s in by_cat_stack[stack_col].dropna().unique().tolist()
-                    ]
-                    for s in structs_present:
-                        sub = by_cat_stack[by_cat_stack[stack_col] == s]
-                        y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
-                        fig.add_bar(
-                            x=cat_order,
-                            y=y_vals,
-                            name=str(s),
-                            marker_color=STRUCT_COLOR.get(s)
-                        )
                 else:
-                    # category == "Structure": one bar per structure, keep colorway
-                    y_by_struct = totals.set_index("cat_key")["cat_total"].to_dict()
-                    for s in cat_order:
-                        fig.add_bar(
-                            x=[s],
-                            y=[float(y_by_struct.get(s, 0.0))],
-                            name=str(s),
-                            marker_color=STRUCT_COLOR.get(s),
-                            showlegend=True
+                    # Top N filter
+                    if top_choice != "All":
+                        top_n = int(top_choice)
+                        top_cats = totals["cat_key"].head(top_n).tolist()
+                        totals = totals[totals["cat_key"].isin(top_cats)]
+                    cat_order = totals["cat_key"].tolist()
+                
+                    fig = go.Figure()
+                
+                    if stack_col:
+                        by_cat_stack = (
+                            p[p["cat_key"].isin(cat_order)]
+                             .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
+                             .sum()
                         )
-
-                totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
-                totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
-
-                fig.add_scatter(
-                    x=cat_order,
-                    y=totals_ordered["cumperc"],
-                    name="Cumulative %",
-                    yaxis="y2",
-                    mode="lines+markers",
-                )
-
-                fig.update_layout(
-                    title=title,
-                    xaxis_title=category,
-                    yaxis_title=y_title,
-                    barmode="stack",
-                    yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                )
-                fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
-                return fig
-
-            if metric == "Down Time":
-                # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
-                p = work[[category, "Structure", metric]].dropna(subset=[category, metric]).copy()
-                p = p.rename(columns={category: "cat_key"})
-                p["abs_metric"] = p[metric].abs()
-                fig = _build_and_plot_pareto(
-                    p,
-                    y_title=f"{metric} (hours)",
-                    title=f"Pareto of {metric} by {category} — Monthly Total {title_suffix}",
-                )
-                if fig:
+                        for s in sorted(by_cat_stack[stack_col].dropna().unique().tolist()):
+                            sub = by_cat_stack[by_cat_stack[stack_col] == s]
+                            y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                            fig.add_bar(x=cat_order, y=y_vals, name=str(s))
+                    else:
+                        # Single series (no stacking when category == "Structure")
+                        y_vals = [float(totals.set_index("cat_key").loc[c, "cat_total"]) for c in cat_order]
+                        fig.add_bar(x=cat_order, y=y_vals, name=str(category))
+                
+                    totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
+                    totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
+                
+                    fig.add_scatter(
+                        x=cat_order,
+                        y=totals_ordered["cumperc"],
+                        name="Cumulative %",
+                        yaxis="y2",
+                        mode="lines+markers",
+                    )
+                
+                    fig.update_layout(
+                        title=f"Pareto of {metric} by {category} — Monthly Total {title_suffix}",
+                        xaxis_title=category,
+                        yaxis_title=f"{metric} (hours)",
+                        barmode="stack",
+                        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
                     safe_download_buttons_for_fig(fig, "pareto_chart_down_time", "pareto_dt")
 
             else:
-                # --- 'Latest per Well' within the month/year ---
+                # --- Original logic: 'Latest per Well' within the month/year ---
                 base_cols = ["Well", "Date", "Structure", category, metric]
                 keep_cols = [c for c in base_cols if c in work.columns]
                 keep_cols = list(dict.fromkeys(keep_cols))  # de-dup names, preserve order
@@ -769,7 +730,7 @@ with tabs[2]:
                 cols_needed = [c for c in list(dict.fromkeys(cols_needed)) if c in data_pareto.columns]
                 p = data_pareto[cols_needed].copy()
                 p = p.loc[:, ~p.columns.duplicated()].copy()
-
+                
                 if category not in p.columns or metric not in p.columns:
                     st.info("Required columns not available after filtering.")
                 else:
@@ -779,12 +740,63 @@ with tabs[2]:
                     else:
                         p["abs_metric"] = p[metric].abs()
                         p = p.rename(columns={category: "cat_key"})
-                        fig = _build_and_plot_pareto(
-                            p,
-                            y_title=f"{metric} (|value|)",
-                            title=f"Pareto of {metric} by {category} — {title_suffix}",
+                
+                        totals = (
+                            p[["cat_key", "abs_metric"]]
+                             .groupby("cat_key", as_index=False)
+                             .sum()
+                             .rename(columns={"abs_metric": "cat_total"})
+                             .sort_values("cat_total", ascending=False)
                         )
-                        if fig:
+                
+                        grand_total = totals["cat_total"].sum()
+                        if grand_total == 0:
+                            st.info("Total is zero after filtering; nothing to plot.")
+                        else:
+                            if top_choice != "All":
+                                top_n = int(top_choice)
+                                top_cats = totals["cat_key"].head(top_n).tolist()
+                                totals = totals[totals["cat_key"].isin(top_cats)]
+                            cat_order = totals["cat_key"].tolist()
+                
+                            fig = go.Figure()
+                
+                            # Stack by Structure only if category != "Structure"
+                            stack_col = "Structure" if ("Structure" in p.columns and category != "Structure") else None
+                            if stack_col:
+                                by_cat_stack = (
+                                    p[p["cat_key"].isin(cat_order)]
+                                     .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
+                                     .sum()
+                                )
+                                for s in sorted(by_cat_stack[stack_col].dropna().unique().tolist()):
+                                    sub = by_cat_stack[by_cat_stack[stack_col] == s]
+                                    y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                                    fig.add_bar(x=cat_order, y=y_vals, name=str(s))
+                            else:
+                                y_vals = [float(totals.set_index("cat_key").loc[c, "cat_total"]) for c in cat_order]
+                                fig.add_bar(x=cat_order, y=y_vals, name=str(category))
+                
+                            totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
+                            totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
+                
+                            fig.add_scatter(
+                                x=cat_order,
+                                y=totals_ordered["cumperc"],
+                                name="Cumulative %",
+                                yaxis="y2",
+                                mode="lines+markers",
+                            )
+                
+                            fig.update_layout(
+                                title=f"Pareto of {metric} by {category} — {title_suffix}",
+                                xaxis_title=category,
+                                yaxis_title=f"{metric} (|value|)",
+                                barmode="stack",
+                                yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                            )
+                            fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
                             safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
                                         
 # ================= Time Series Visualization Tab (dual y-axis + default = monthly top oil producer) =================
@@ -1193,11 +1205,4 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
-
-
-
-
-
-
-
 
