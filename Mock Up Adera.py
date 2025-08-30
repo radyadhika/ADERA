@@ -160,7 +160,7 @@ def _activate_tab(tab_label: str):
     """, height=0)
 
 # If we came in with a jump request (?ts_well=...&go_ts=1), set the well and switch tabs immediately
-_qp = st.experimental_get_query_params()
+_qp = st.query_params()
 if "ts_well" in _qp:
     _tsw = _qp["ts_well"][0] if isinstance(_qp["ts_well"], list) else _qp["ts_well"]
     st.session_state["ts_well"] = _tsw  # preselect in the TS selectbox
@@ -980,4 +980,5 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
