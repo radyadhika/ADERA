@@ -249,6 +249,22 @@ tabs = st.tabs([
 def have(*cols):
     return all(c in df.columns for c in cols)
 
+# === after df is created (right after coerce_numeric / add_time_parts is fine) ===
+def _active_colorway():
+    try:
+        templ = pio.templates.default
+        templ = templ[0] if isinstance(templ, (list, tuple)) else templ
+        return list(pio.templates[templ].layout.colorway)
+    except Exception:
+        return list(px.colors.qualitative.Plotly)
+
+STRUCT_COLOR = {}
+if "Structure" in df.columns:
+    seq = _active_colorway()
+    # first-appearance order => matches Plotly Express behavior
+    structs = pd.unique(df["Structure"].dropna().astype(str))
+    STRUCT_COLOR = {s: seq[i % len(seq)] for i, s in enumerate(structs)}
+
 # ==== DROP-IN REPLACEMENT: Statistics tab (auto-select latest month) ====
 with tabs[0]:
     st.header('Statistics')
@@ -647,13 +663,28 @@ with tabs[2]:
                  # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
                 # Tip: choose Category = 'Well' to see total downtime hours per well in the month.
                 
-                # If the chosen category is "Structure", don't stack by Structure again.
-                stack_col = "Structure" if (category != "Structure" and "Structure" in work.columns) else None
-                sel_cols = [category, metric] + ([stack_col] if stack_col else [])
-                p = work[sel_cols].dropna(subset=[category, metric]).copy()
-                p = p.loc[:, ~p.columns.duplicated()].copy()
-                p = p.rename(columns={category: "cat_key"})
-                p["abs_metric"] = p[metric].abs()
+                # Stack by Structure only if category != "Structure"
+                stack_col = "Structure" if ("Structure" in p.columns and category != "Structure") else None
+                if stack_col:
+                    by_cat_stack = (
+                        p[p["cat_key"].isin(cat_order)]
+                         .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
+                         .sum()
+                    )
+                    # keep color order consistent with STRUCT_COLOR mapping
+                    structs_present = [
+                        s for s in STRUCT_COLOR.keys()
+                        if s in by_cat_stack[stack_col].dropna().unique().tolist()
+                    ]
+                    for s in structs_present:
+                        sub = by_cat_stack[by_cat_stack[stack_col] == s]
+                        y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                        fig.add_bar(
+                            x=cat_order,
+                            y=y_vals,
+                            name=str(s),
+                            marker_color=STRUCT_COLOR.get(s)  # <-- matches your app’s palette
+                        )
                 
                 totals = (
                     p.groupby("cat_key", as_index=False)["abs_metric"]
@@ -686,16 +717,15 @@ with tabs[2]:
                             y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
                             fig.add_bar(x=cat_order, y=y_vals, name=str(s))
                     else:
-                        # Single series when category == "Structure" — let Plotly assign default colors per trace
-                        y_by_cat = totals.set_index("cat_key")["cat_total"].to_dict()
-                        
-                        max_legend = 20  # keep the legend readable; tweak as you like
-                        for i, c in enumerate(cat_order):
+                        # totals: cat_key (=Structure) -> total
+                        y_by_struct = totals.set_index("cat_key")["cat_total"].to_dict()
+                        for i, s in enumerate(cat_order):  # cat_order already ordered by total
                             fig.add_bar(
-                                x=[c],
-                                y=[float(y_by_cat[c])],
-                                name=str(c),
-                                showlegend=(i < max_legend),  # hide legend entries after N, but colors still apply
+                                x=[s],
+                                y=[float(y_by_struct[s])],
+                                name=str(s),
+                                marker_color=STRUCT_COLOR.get(s),  # <-- consistent color
+                                showlegend=True
                             )
                 
                     totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
@@ -779,21 +809,31 @@ with tabs[2]:
                                      .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
                                      .sum()
                                 )
-                                for s in sorted(by_cat_stack[stack_col].dropna().unique().tolist()):
+                                # keep color order consistent with STRUCT_COLOR mapping
+                                structs_present = [
+                                    s for s in STRUCT_COLOR.keys()
+                                    if s in by_cat_stack[stack_col].dropna().unique().tolist()
+                                ]
+                                for s in structs_present:
                                     sub = by_cat_stack[by_cat_stack[stack_col] == s]
                                     y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
-                                    fig.add_bar(x=cat_order, y=y_vals, name=str(s))
-                            else:
-                                # Single series when category == "Structure" — let Plotly assign default colors per trace
-                                y_by_cat = totals.set_index("cat_key")["cat_total"].to_dict()
-                                
-                                max_legend = 20  # keep the legend readable; tweak as you like
-                                for i, c in enumerate(cat_order):
                                     fig.add_bar(
-                                        x=[c],
-                                        y=[float(y_by_cat[c])],
-                                        name=str(c),
-                                        showlegend=(i < max_legend),  # hide legend entries after N, but colors still apply
+                                        x=cat_order,
+                                        y=y_vals,
+                                        name=str(s),
+                                        marker_color=STRUCT_COLOR.get(s)  # <-- matches your app’s palette
+                                    )
+
+                            else:
+                                # totals: cat_key (=Structure) -> total
+                                y_by_struct = totals.set_index("cat_key")["cat_total"].to_dict()
+                                for i, s in enumerate(cat_order):  # cat_order already ordered by total
+                                    fig.add_bar(
+                                        x=[s],
+                                        y=[float(y_by_struct[s])],
+                                        name=str(s),
+                                        marker_color=STRUCT_COLOR.get(s),  # <-- consistent color
+                                        showlegend=True
                                     )
                         
                                     totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
@@ -1224,6 +1264,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
