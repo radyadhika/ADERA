@@ -642,12 +642,17 @@ with tabs[2]:
             title_suffix = f"{int(sel_month)}/{int(sel_year)}" if len(months_for_year) else "All Data"
 
             if metric == "Down Time":
-                # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
+                 # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
                 # Tip: choose Category = 'Well' to see total downtime hours per well in the month.
-                p = work[[category, "Structure", metric]].dropna(subset=[category, metric]).copy()
+                
+                # If the chosen category is "Structure", don't stack by Structure again.
+                stack_col = "Structure" if (category != "Structure" and "Structure" in work.columns) else None
+                sel_cols = [category, metric] + ([stack_col] if stack_col else [])
+                p = work[sel_cols].dropna(subset=[category, metric]).copy()
+                p = p.loc[:, ~p.columns.duplicated()].copy()
                 p = p.rename(columns={category: "cat_key"})
                 p["abs_metric"] = p[metric].abs()
-
+                
                 totals = (
                     p.groupby("cat_key", as_index=False)["abs_metric"]
                      .sum()
@@ -655,7 +660,7 @@ with tabs[2]:
                      .sort_values("cat_total", ascending=False)
                 )
                 grand_total = totals["cat_total"].sum()
-
+                
                 if grand_total == 0:
                     st.info("Total is zero after filtering; nothing to plot.")
                 else:
@@ -665,22 +670,27 @@ with tabs[2]:
                         top_cats = totals["cat_key"].head(top_n).tolist()
                         totals = totals[totals["cat_key"].isin(top_cats)]
                     cat_order = totals["cat_key"].tolist()
-
-                    by_cat_struct = (
-                        p[p["cat_key"].isin(cat_order)]
-                         .groupby(["cat_key", "Structure"], as_index=False)["abs_metric"]
-                         .sum()
-                    )
-
+                
+                    fig = go.Figure()
+                
+                    if stack_col:
+                        by_cat_stack = (
+                            p[p["cat_key"].isin(cat_order)]
+                             .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
+                             .sum()
+                        )
+                        for s in sorted(by_cat_stack[stack_col].dropna().unique().tolist()):
+                            sub = by_cat_stack[by_cat_stack[stack_col] == s]
+                            y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                            fig.add_bar(x=cat_order, y=y_vals, name=str(s))
+                    else:
+                        # Single series (no stacking when category == "Structure")
+                        y_vals = [float(totals.set_index("cat_key").loc[c, "cat_total"]) for c in cat_order]
+                        fig.add_bar(x=cat_order, y=y_vals, name=str(category))
+                
                     totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
                     totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
-
-                    fig = go.Figure()
-                    for s in sorted(by_cat_struct["Structure"].dropna().unique().tolist()):
-                        sub = by_cat_struct[by_cat_struct["Structure"] == s]
-                        y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
-                        fig.add_bar(x=cat_order, y=y_vals, name=str(s))
-
+                
                     fig.add_scatter(
                         x=cat_order,
                         y=totals_ordered["cumperc"],
@@ -688,7 +698,7 @@ with tabs[2]:
                         yaxis="y2",
                         mode="lines+markers",
                     )
-
+                
                     fig.update_layout(
                         title=f"Pareto of {metric} by {category} — Monthly Total {title_suffix}",
                         xaxis_title=category,
@@ -720,7 +730,7 @@ with tabs[2]:
                 cols_needed = [c for c in list(dict.fromkeys(cols_needed)) if c in data_pareto.columns]
                 p = data_pareto[cols_needed].copy()
                 p = p.loc[:, ~p.columns.duplicated()].copy()
-
+                
                 if category not in p.columns or metric not in p.columns:
                     st.info("Required columns not available after filtering.")
                 else:
@@ -730,7 +740,7 @@ with tabs[2]:
                     else:
                         p["abs_metric"] = p[metric].abs()
                         p = p.rename(columns={category: "cat_key"})
-
+                
                         totals = (
                             p[["cat_key", "abs_metric"]]
                              .groupby("cat_key", as_index=False)
@@ -738,7 +748,7 @@ with tabs[2]:
                              .rename(columns={"abs_metric": "cat_total"})
                              .sort_values("cat_total", ascending=False)
                         )
-
+                
                         grand_total = totals["cat_total"].sum()
                         if grand_total == 0:
                             st.info("Total is zero after filtering; nothing to plot.")
@@ -748,22 +758,28 @@ with tabs[2]:
                                 top_cats = totals["cat_key"].head(top_n).tolist()
                                 totals = totals[totals["cat_key"].isin(top_cats)]
                             cat_order = totals["cat_key"].tolist()
-
-                            by_cat_struct = (
-                                p[p["cat_key"].isin(cat_order)]
-                                 .groupby(["cat_key", "Structure"], as_index=False)["abs_metric"]
-                                 .sum()
-                            )
-
+                
+                            fig = go.Figure()
+                
+                            # Stack by Structure only if category != "Structure"
+                            stack_col = "Structure" if ("Structure" in p.columns and category != "Structure") else None
+                            if stack_col:
+                                by_cat_stack = (
+                                    p[p["cat_key"].isin(cat_order)]
+                                     .groupby(["cat_key", stack_col], as_index=False)["abs_metric"]
+                                     .sum()
+                                )
+                                for s in sorted(by_cat_stack[stack_col].dropna().unique().tolist()):
+                                    sub = by_cat_stack[by_cat_stack[stack_col] == s]
+                                    y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                                    fig.add_bar(x=cat_order, y=y_vals, name=str(s))
+                            else:
+                                y_vals = [float(totals.set_index("cat_key").loc[c, "cat_total"]) for c in cat_order]
+                                fig.add_bar(x=cat_order, y=y_vals, name=str(category))
+                
                             totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
                             totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
-
-                            fig = go.Figure()
-                            for s in sorted(by_cat_struct["Structure"].dropna().unique().tolist()):
-                                sub = by_cat_struct[by_cat_struct["Structure"] == s]
-                                y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
-                                fig.add_bar(x=cat_order, y=y_vals, name=str(s))
-
+                
                             fig.add_scatter(
                                 x=cat_order,
                                 y=totals_ordered["cumperc"],
@@ -771,7 +787,7 @@ with tabs[2]:
                                 yaxis="y2",
                                 mode="lines+markers",
                             )
-
+                
                             fig.update_layout(
                                 title=f"Pareto of {metric} by {category} — {title_suffix}",
                                 xaxis_title=category,
@@ -782,7 +798,7 @@ with tabs[2]:
                             )
                             fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
                             safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
-                        
+                                        
 # ================= Time Series Visualization Tab (dual y-axis + default = monthly top oil producer) =================
 with tabs[3]:
     st.header("Time Series Visualization")
@@ -907,74 +923,240 @@ with tabs[3]:
 
 # ================= Anomaly Detection Tab =================
 with tabs[4]:
-    st.header("Anomaly Detection (Isolation Forest)")
+    st.header("#StillMaintenanceMaap Anomaly Detection (w/ Isolation Forest)")
+
     target_cols_default = [c for c in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Pump Eff (%)", "Pcsg", "Ptbg", "Pfl", "Psep"] if c in df.columns]
     features = st.multiselect("Features for anomaly detection", target_cols_default, default=target_cols_default)
     contamination = st.slider("Expected anomaly fraction", 0.01, 0.30, 0.05, step=0.01)
     scope = st.radio("Scope", ["Per Well", "All Wells Combined"], index=0, horizontal=True)
 
+    explain = st.checkbox("Show explanations (top drivers, deltas vs previous)", value=True)
+    max_k = max(1, len(features))
+    topk = st.number_input("Top features to list", min_value=1, max_value=max_k, value=min(3, max_k), step=1)
+    show_heatmap = st.checkbox("Show z-score heatmap (anomalies × features)", value=False)
+
     def run_iforest(data: pd.DataFrame, feat: list[str], cont: float):
         X = data[feat].dropna()
         if len(X) < 10:
-            return None, None
+            return None, None, None, None
         model = IsolationForest(n_estimators=300, contamination=cont, random_state=42)
-        scores = model.fit_predict(X)  # -1 = anomaly
-        return X.index, scores
+        labels = model.fit_predict(X)                 # -1 = anomaly, 1 = normal
+        decfun = model.decision_function(X)           # more negative => more anomalous
+        return X.index, labels, decfun, model
+
+    def robust_z(curr_df: pd.DataFrame, baseline_df: pd.DataFrame, feat: list[str]) -> pd.DataFrame:
+        """Robust z using median & MAD (fallback to std if MAD==0)."""
+        med = baseline_df[feat].median()
+        mad = (baseline_df[feat] - med).abs().median()
+        # Convert MAD to sigma-like scale
+        sigma = mad * 1.4826
+        # Where sigma == 0, fallback to std; where still 0, fallback to 1 to avoid div/0
+        fallback_std = baseline_df[feat].std().replace(0, np.nan)
+        sigma = sigma.where(sigma > 0, fallback_std).fillna(1.0)
+        z = (curr_df[feat] - med) / sigma
+        return z
+
+    def add_prev_values(block: pd.DataFrame, feat: list[str]) -> pd.DataFrame:
+        """Add previous values per feature (within same well, by Date if present, else by index order)."""
+        if "Well" in block.columns and "Date" in block.columns:
+            tmp = block.sort_values(["Well", "Date"]).copy()
+            prev = tmp.groupby("Well")[feat].shift(1)
+            prev.index = tmp.index
+            prev = prev.reindex(block.index)
+        else:
+            tmp = block.copy()
+            prev = tmp[feat].shift(1)
+        prev.columns = [f"Prev {c}" for c in prev.columns]
+        return prev
 
     if not features:
         st.info("Select at least one feature.")
     else:
+        base_cols = [c for c in ["Date", "Well", "Structure"] if c in df.columns]
+
         if scope == "Per Well" and "Well" in df.columns:
-            results = []
-            for w in sorted(df['Well'].dropna().unique()):
+            rows = []
+            heatmaps = []  # collect (title, z_df) for optional heatmap
+
+            for w in sorted(df["Well"].dropna().unique()):
                 d = df[df["Well"] == w].copy()
-                idx, scores = run_iforest(d, [c for c in features if c in d.columns], contamination)
+                feat = [c for c in features if c in d.columns]
+                idx, labels, decfun, model = run_iforest(d, feat, contamination)
                 if idx is None:
                     continue
-                anom_idx = idx[np.where(scores == -1)]
-                if len(anom_idx):
-                    base_cols = ["Date", "Well", "Structure"]
-                    feat_cols = [c for c in features if c in d.columns]
-                    take_cols = safe_cols(d, base_cols + feat_cols)
-                    
-                    # If nothing to show, skip
-                    if not take_cols:
-                        continue
-                    
-                    out = d.loc[anom_idx, take_cols]
-                    if "Date" in out.columns:
-                        out = out.sort_values("Date")
-                    results.append(out)
-                    
-            if results:
-                res = pd.concat(results).sort_values(["Well","Date"])
-                st.dataframe(res)
+
+                # anomaly row indexes (original dataframe index)
+                anom_mask_pos = np.where(labels == -1)[0]
+                if len(anom_mask_pos) == 0:
+                    continue
+                anom_idx = idx[anom_mask_pos]
+
+                # Current anomaly block
+                curr = d.loc[anom_idx, base_cols + feat].copy()
+
+                # Robust z-scores vs this well's historical distribution
+                z = robust_z(curr_df=curr, baseline_df=d, feat=feat)
+                abs_z = z.abs()
+
+                # Top-1 driver & top-k list
+                top1_feat = abs_z.idxmax(axis=1)
+                top1_val = abs_z.max(axis=1)
+
+                topk_list = abs_z.apply(lambda r: list(r.nlargest(int(topk)).items()), axis=1)
+                for k in range(1, int(topk) + 1):
+                    curr[f"Top{k}"] = topk_list.apply(
+                        lambda lst, k=k: (f"{lst[k-1][0]} (|z|={lst[k-1][1]:.2f})" if len(lst) >= k else "")
+                    )
+
+                # Previous values (to compute deltas for the row's top1 feature)
+                d_sorted = d.sort_values("Date") if "Date" in d.columns else d.copy()
+                prev_all = add_prev_values(d_sorted, feat).reindex(d_sorted.index)
+                # Align prev rows to anomaly indices
+                prev_for_anom = prev_all.reindex(anom_idx)
+
+                # Extract prev/current for the row-specific top feature
+                def _extract_top_vals(row):
+                    f = row["Top1_feat"]
+                    curr_v = row.get(f, np.nan)
+                    prev_v = prev_for_anom.loc[row.name, f"Prev {f}"] if f"Prev {f}" in prev_for_anom.columns else np.nan
+                    dv = curr_v - prev_v if pd.notna(curr_v) and pd.notna(prev_v) else np.nan
+                    dp = (dv / prev_v * 100.0) if pd.notna(dv) and pd.notna(prev_v) and prev_v != 0 else np.nan
+                    return pd.Series({"Value": curr_v, "Prev Value": prev_v, "Δ abs": dv, "Δ %": dp})
+
+                curr["Top1_feat"] = top1_feat
+                curr["|z| (Top1)"] = top1_val.round(2)
+
+                # Attach IF decision score
+                dec_series = pd.Series(decfun, index=idx)
+                curr["IF score (more − = more anomalous)"] = dec_series.reindex(anom_idx).round(4)
+
+                # Pull per-row values/deltas for Top1 feature
+                val_blocks = curr.apply(_extract_top_vals, axis=1)
+                curr = pd.concat([curr, val_blocks], axis=1)
+
+                # Keep tidy columns
+                keep = base_cols + ["IF score (more − = more anomalous)",
+                                    "Top1_feat", "|z| (Top1)", "Value", "Prev Value", "Δ abs", "Δ %"] + \
+                       [f"Top{k}" for k in range(1, int(topk) + 1)]
+                curr = curr[keep]
+
+                rows.append(curr)
+
+                if show_heatmap:
+                    # Keep a small z-score matrix for this well's anomalies
+                    z_disp = z.copy()
+                    # Label rows with date (if any) for readability
+                    if "Date" in curr.columns:
+                        ridx = curr["Date"].dt.strftime("%Y-%m-%d").fillna("").astype(str)
+                        z_disp.index = [f"{w} | {r}" for r in ridx]
+                    else:
+                        z_disp.index = [f"{w} | {i}" for i in range(len(z_disp))]
+                    heatmaps.append((w, z_disp))
+
+            if rows:
+                res = pd.concat(rows).sort_values([c for c in ["Well", "Date"] if c in base_cols])
+                st.subheader("Anomaly table with drivers")
+                st.dataframe(res, use_container_width=True)
             else:
                 st.success("No anomalies detected with current settings.")
+
+            if show_heatmap and heatmaps:
+                st.subheader("Feature z-score heatmap (higher |z| ⇒ stronger driver)")
+                for w, zmat in heatmaps:
+                    fig_hm = go.Figure(data=go.Heatmap(
+                        z=zmat.values,
+                        x=zmat.columns.tolist(),
+                        y=zmat.index.tolist(),
+                        zmid=0,
+                        colorbar=dict(title="z-score")
+                    ))
+                    fig_hm.update_layout(
+                        title=f"Well {w} — anomaly feature z-scores",
+                        xaxis_title="Feature",
+                        yaxis_title="Anomaly (row)"
+                    )
+                    st.plotly_chart(fig_hm, use_container_width=True)
+
         else:
+            # All wells combined: single model + global baseline
             d = df.copy()
             feat = [c for c in features if c in d.columns]
-            idx, scores = run_iforest(d, feat, contamination)
+            idx, labels, decfun, model = run_iforest(d, feat, contamination)
             if idx is None:
                 st.info("Not enough data for anomaly detection.")
             else:
-                anom_idx = idx[np.where(scores == -1)]
-                base_cols = ["Date", "Well", "Structure"]
-                take_cols = safe_cols(d, base_cols + feat)
-                
-                res = d.loc[anom_idx, take_cols]
-                # Sort only by columns that exist
-                sort_keys = [c for c in ["Well", "Date"] if c in res.columns]
-                if sort_keys:
-                    res = res.sort_values(sort_keys)
-                if len(res):
-                    st.dataframe(res)
-                else:
+                anom_pos = np.where(labels == -1)[0]
+                if len(anom_pos) == 0:
                     st.success("No anomalies detected with current settings.")
+                else:
+                    anom_idx = idx[anom_pos]
+                    curr = d.loc[anom_idx, base_cols + feat].copy()
+
+                    # Robust z vs GLOBAL baseline
+                    z = robust_z(curr_df=curr, baseline_df=d, feat=feat)
+                    abs_z = z.abs()
+                    top1_feat = abs_z.idxmax(axis=1)
+                    top1_val = abs_z.max(axis=1)
+
+                    topk_list = abs_z.apply(lambda r: list(r.nlargest(int(topk)).items()), axis=1)
+                    for k in range(1, int(topk) + 1):
+                        curr[f"Top{k}"] = topk_list.apply(
+                            lambda lst, k=k: (f"{lst[k-1][0]} (|z|={lst[k-1][1]:.2f})" if len(lst) >= k else "")
+                        )
+
+                    # Previous values by (Well, Date) if present, else simple shift
+                    if "Well" in d.columns and "Date" in d.columns:
+                        d_sorted = d.sort_values(["Well", "Date"]).copy()
+                        prev_all = d_sorted.groupby("Well")[feat].shift(1)
+                        prev_all.index = d_sorted.index
+                        prev_for_anom = prev_all.reindex(anom_idx)
+                    else:
+                        prev_for_anom = d[feat].shift(1).reindex(anom_idx)
+
+                    curr["Top1_feat"] = top1_feat
+                    curr["|z| (Top1)"] = top1_val.round(2)
+                    dec_series = pd.Series(decfun, index=idx)
+                    curr["IF score (more − = more anomalous)"] = dec_series.reindex(anom_idx).round(4)
+
+                    def _extract_top_vals(row):
+                        f = row["Top1_feat"]
+                        curr_v = row.get(f, np.nan)
+                        prev_v = prev_for_anom.loc[row.name, f] if f in prev_for_anom.columns else np.nan
+                        dv = curr_v - prev_v if pd.notna(curr_v) and pd.notna(prev_v) else np.nan
+                        dp = (dv / prev_v * 100.0) if pd.notna(dv) and pd.notna(prev_v) and prev_v != 0 else np.nan
+                        return pd.Series({"Value": curr_v, "Prev Value": prev_v, "Δ abs": dv, "Δ %": dp})
+
+                    val_blocks = curr.apply(_extract_top_vals, axis=1)
+                    curr = pd.concat([curr, val_blocks], axis=1)
+
+                    keep = base_cols + ["IF score (more − = more anomalous)",
+                                        "Top1_feat", "|z| (Top1)", "Value", "Prev Value", "Δ abs", "Δ %"] + \
+                           [f"Top{k}" for k in range(1, int(topk) + 1)]
+                    res = curr[keep].sort_values([c for c in ["Well", "Date"] if c in base_cols])
+
+                    st.subheader("Anomaly table with drivers")
+                    st.dataframe(res, use_container_width=True)
+
+                    if show_heatmap:
+                        z_disp = z.copy()
+                        # Label rows with Well/Date if possible
+                        if "Well" in res.columns and "Date" in res.columns:
+                            ridx = res.apply(lambda r: f"{r.get('Well','?')} | {pd.to_datetime(r.get('Date')).strftime('%Y-%m-%d') if pd.notna(r.get('Date')) else ''}", axis=1)
+                            z_disp.index = ridx
+                        fig_hm = go.Figure(data=go.Heatmap(
+                            z=z_disp.values, x=z_disp.columns.tolist(), y=z_disp.index.tolist(),
+                            zmid=0, colorbar=dict(title="z-score")
+                        ))
+                        fig_hm.update_layout(
+                            title="Global anomalies — feature z-scores",
+                            xaxis_title="Feature",
+                            yaxis_title="Anomaly (row)"
+                        )
+                        st.plotly_chart(fig_hm, use_container_width=True)
 
 # ================= Predictive Modeling Tab =================
 with tabs[5]:
-    st.header("Predictive Modeling")
+    st.header("#StillMaintenanceMaap Predictive Modeling")
     target = "Act. Nett (bopd)"
     default_feats_all = [
         "Pot. Nett (bopd)", "Pot. Gross (bfpd)", "Pot. Gas (MMscfd)", "Pot. WC (%)",
@@ -1023,3 +1205,4 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
