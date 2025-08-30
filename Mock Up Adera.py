@@ -907,7 +907,7 @@ with tabs[3]:
 
 # ================= Anomaly Detection Tab =================
 with tabs[4]:
-    st.header("Anomaly Detection (Isolation Forest)")
+    st.header("#StillMaintenanceMaap Anomaly Detection (w/ Isolation Forest)")
 
     target_cols_default = [c for c in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Pump Eff (%)", "Pcsg", "Ptbg", "Pfl", "Psep"] if c in df.columns]
     features = st.multiselect("Features for anomaly detection", target_cols_default, default=target_cols_default)
@@ -1140,7 +1140,7 @@ with tabs[4]:
 
 # ================= Predictive Modeling Tab =================
 with tabs[5]:
-    st.header("Predictive Modeling")
+    st.header("#StillMaintenanceMaap Predictive Modeling")
     target = "Act. Nett (bopd)"
     default_feats_all = [
         "Pot. Nett (bopd)", "Pot. Gross (bfpd)", "Pot. Gas (MMscfd)", "Pot. WC (%)",
@@ -1189,5 +1189,6 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
