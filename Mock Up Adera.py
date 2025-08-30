@@ -20,6 +20,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 # =========================
 st.set_page_config(page_title='Adera Data Dashboard', layout='wide')
 st.title('Adera Data Dashboard')
+st.caption("Made for Kertas Kerja Wajib (KKW) fulfillment.")
 
 # =========================
 # Utilities
@@ -314,8 +315,7 @@ with tabs[0]:
             else:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
-
-# ==== DROP-IN REPLACEMENT: Rate Change Alerts (stacked tables; all rows in window vs previous; date-only; Pot columns; Δ beside Last) ====
+# ================= Rate Change Alerts =================
 with tabs[1]:
     st.header("Rate Change Alerts")
 
@@ -494,147 +494,71 @@ with tabs[1]:
                 else:
                     st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
-# ================= Pareto Chart Tab =================
+# ==== DROP-IN REPLACEMENT: Pareto Chart (auto-latest month; Down Time uses monthly total) ====
 with tabs[2]:
     st.header("Pareto Chart")
-
+    
+    
     # ---- Metric & Category (only show existing) ----
     metric = st.selectbox(
-        "Metric (absolute values are used for Pareto accumulation)",
-        [m for m in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Down Time"] if m in df.columns] or ["Act. Nett (bopd)"]
+    "Metric (absolute values are used for Pareto accumulation)",
+    [m for m in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Down Time"] if m in df.columns] or ["Act. Nett (bopd)"]
     )
     category = st.selectbox(
-        "Category",
-        [c for c in ["Well", "Structure", "Zone", "Lifting Method"] if c in df.columns] or ["Well"]
+    "Category",
+    [c for c in ["Well", "Structure", "Zone", "Lifting Method"] if c in df.columns] or ["Well"]
     )
-
+    
+    
     if not have("Date", "Well"):
-        st.info("Need 'Date' and 'Well' columns.")
+    st.info("Need 'Date' and 'Well' columns.")
     else:
-        # ---- Month/Year selectors ----
-        avail_years = sorted(df['Year'].dropna().unique(), reverse=True)
-        sel_year = st.selectbox("Year", avail_years if len(avail_years) else [np.nan], key="pareto_year")
-
-        months_for_year = sorted(df[df['Year'] == sel_year]['Month'].dropna().unique()) if not pd.isna(sel_year) else []
-        sel_month = st.selectbox("Month", months_for_year if len(months_for_year) else [np.nan], key="pareto_month")
-
-        # ---- Top N selector ----
-        top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=3)
-
-        # ---- Filter to selected month/year ----
-        work = df.copy()
-        if not np.isnan(sel_year):
-            work = work[work["Year"] == sel_year]
-        if len(months_for_year):
-            work = work[work["Month"] == sel_month]
-
-        if work.empty or metric not in work.columns or category not in work.columns:
-            st.info("No data for the selected month/year (or selected columns missing).")
-        else:
-            # ---- ALWAYS 'Latest per Well' within the month/year ----
-            base_cols = ["Well", "Date", "Structure", category, metric]
-            keep_cols = [c for c in base_cols if c in work.columns]
-            keep_cols = list(dict.fromkeys(keep_cols))  # de-dup names, preserve order
-
-            tmp = work[keep_cols].copy()
-            tmp = tmp.loc[:, ~tmp.columns.duplicated()].copy()  # extra safety
-
-            data_pareto = (
-                tmp.dropna(subset=["Well", "Date"])
-                   .sort_values("Date")
-                   .groupby("Well", as_index=False)
-                   .last()
-            )
-
-            if "Structure" not in data_pareto.columns:
-                data_pareto["Structure"] = "Unknown"
-
-            # ---------- SAFE aggregation using a temp key ----------
-            # Build mini table and rename category -> 'cat_key' to avoid name collisions in groupby results
-            cols_needed = [category, "Structure", metric]
-            cols_needed = [c for c in list(dict.fromkeys(cols_needed)) if c in data_pareto.columns]
-            p = data_pareto[cols_needed].copy()
-            p = p.loc[:, ~p.columns.duplicated()].copy()
-
-            if category not in p.columns or metric not in p.columns:
-                st.info("Required columns not available after filtering.")
-            else:
-                p = p.dropna(subset=[category, metric])
-                if p.empty:
-                    st.info("No rows to aggregate after filtering.")
-                else:
-                    p["abs_metric"] = p[metric].abs()
-                    p = p.rename(columns={category: "cat_key"})  # <--- key step
-
-                    # Totals per category (for ordering & cumulative %)
-                    totals = (
-                        p[["cat_key", "abs_metric"]]
-                        .groupby("cat_key", as_index=False)
-                        .sum()
-                        .rename(columns={"abs_metric": "cat_total"})
-                        .sort_values("cat_total", ascending=False)
-                    )
-
-                    grand_total = totals["cat_total"].sum()
-                    if grand_total == 0:
-                        st.info("Total is zero after filtering; nothing to plot.")
-                    else:
-                        # Top N categories by total
-                        if top_choice != "All":
-                            top_n = int(top_choice)
-                            top_cats = totals["cat_key"].head(top_n).tolist()
-                            totals = totals[totals["cat_key"].isin(top_cats)]
-                        else:
-                            top_cats = totals["cat_key"].tolist()
-
-                        # Order categories
-                        cat_order = totals["cat_key"].tolist()
-
-                        # Per-(category, structure) contributions for stacked bars
-                        if "Structure" not in p.columns:
-                            p["Structure"] = "Unknown"
-
-                        by_cat_struct = (
-                            p[p["cat_key"].isin(cat_order)]
-                            .groupby(["cat_key", "Structure"], as_index=False)["abs_metric"]
-                            .sum()
-                        )
-
-                        # Cumulative % over ordered categories
-                        totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
-                        totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
-
-                        # ---- Plot: stacked bars by Structure, cumulative % line by category ----
-                        fig = go.Figure()
-
-                        structures = sorted(by_cat_struct["Structure"].dropna().unique().tolist())
-                        for s in structures:
-                            sub = by_cat_struct[by_cat_struct["Structure"] == s]
-                            y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
-                            fig.add_bar(x=cat_order, y=y_vals, name=str(s))
-
-                        fig.add_scatter(
-                            x=cat_order,
-                            y=totals_ordered["cumperc"],
-                            name="Cumulative %",
-                            yaxis="y2",
-                            mode="lines+markers"
-                        )
-
-                        title_suffix = f"{int(sel_month)}/{int(sel_year)}" if not (np.isnan(sel_year) or len(months_for_year) == 0) else "All Data"
-                        # Pretty x-axis labels: show the *original* category name
-                        fig.update_layout(
-                            title=f"Pareto of {metric} by {category} — {title_suffix}",
-                            xaxis_title=category,
-                            yaxis_title=f"{metric} (|value|)",
-                            barmode="stack",
-                            yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                        )
-                        # Replace x tick labels from cat_key to original category values
-                        fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
-
-                        safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
+    # ---- Auto-default to latest month/year available (same as Statistics) ----
+    latest_dt = pd.to_datetime(df['Date'], errors='coerce').max()
+    latest_year = int(latest_dt.year) if pd.notna(latest_dt) else int(pd.Timestamp.today().year)
+    latest_month = int(latest_dt.month) if pd.notna(latest_dt) else int(pd.Timestamp.today().month)
+    
+    
+    avail_years_raw = sorted(df['Year'].dropna().unique(), reverse=True)
+    avail_years = [int(y) for y in avail_years_raw] if len(avail_years_raw) else []
+    year_index = 0 if (len(avail_years) and latest_year in avail_years) else 0
+    sel_year = st.selectbox("Year", avail_years if len(avail_years) else [np.nan], index=year_index, key="pareto_year")
+    
+    
+    months_for_year_raw = sorted(df[df['Year'] == sel_year]['Month'].dropna().unique()) if not pd.isna(sel_year) else []
+    months_for_year = [int(m) for m in months_for_year_raw] if len(months_for_year_raw) else []
+    if len(months_for_year):
+    if sel_year == latest_year and latest_month in months_for_year:
+    month_index = months_for_year.index(latest_month)
+    else:
+    month_index = len(months_for_year) - 1
+    else:
+    month_index = 0
+    sel_month = st.selectbox("Month", months_for_year if len(months_for_year) else [np.nan], index=month_index if len(months_for_year) else 0, key="pareto_month")
+    
+    
+    # ---- Top N selector ----
+    top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=3)
+    
+    
+    # ---- Filter to selected month/year ----
+    work = df.copy()
+    if not np.isnan(sel_year):
+    work = work[work["Year"] == sel_year]
+    if len(months_for_year):
+    work = work[work["Month"] == sel_month]
+    
+    
+    if work.empty or metric not in work.columns or category not in work.columns:
+    st.info("No data for the selected month/year (or selected columns missing).")
+    else:
+    # Ensure Structure exists for stacking
+    if "Structure" not in work.columns:
+    work = work.copy()
+    work["Structure"] = "Unknown"
+    
+    
+    safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
                         
 # ================= Time Series Visualization Tab =================
 with tabs[3]:
@@ -779,14 +703,3 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
-
-
-
-
-
-
-
-
-
-
-
