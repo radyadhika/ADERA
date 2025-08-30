@@ -14,7 +14,6 @@ from sklearn.ensemble import IsolationForest, RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
-from urllib.parse import quote
 
 # =========================
 # Page config
@@ -458,19 +457,7 @@ with tabs[1]:
 
                     st.subheader("Oil Alerts")
                     if len(oil_out):
-                        oil_out = oil_out.copy()
-                        oil_out["🔗 TS"] = oil_out["Well"].apply(lambda w: f"?ts_well={quote(str(w))}")
-                        st.dataframe(
-                            oil_out,
-                            column_config={
-                                "🔗 TS": st.column_config.LinkColumn(
-                                    label="Open Time Series",
-                                    help="Open Time Series Visualization with this well pre-selected",
-                                    display_text="Open TS"
-                                )
-                            },
-                            use_container_width=True,
-                        )
+                        st.dataframe(oil_out)
                     else:
                         st.success("No oil wells crossed the threshold for the selected window.")
                 else:
@@ -498,22 +485,10 @@ with tabs[1]:
 
                     # Format dates as YYYY-MM-DD
                     gas_out = format_date_cols(gas_out, ["Prev Date", "Last Date"]) 
-                    
+
                     st.subheader("Gas Alerts")
                     if len(gas_out):
-                        gas_out = gas_out.copy()
-                        gas_out["🔗 TS"] = gas_out["Well"].apply(lambda w: f"?ts_well={quote(str(w))}")
-                        st.dataframe(
-                            gas_out,
-                            column_config={
-                                "🔗 TS": st.column_config.LinkColumn(
-                                    label="Open Time Series",
-                                    help="Open Time Series Visualization with this well pre-selected",
-                                    display_text="Open TS"
-                                )
-                            },
-                            use_container_width=True,
-                        )
+                        st.dataframe(gas_out)
                     else:
                         st.success("No gas wells crossed the threshold for the selected window.")
                 else:
@@ -752,16 +727,6 @@ with tabs[3]:
         # --- Compute Top-1 oil producer of that month (same logic as Statistics: latest-per-well, then sort by Act. Nett) ---
         wells_all = sorted(df["Well"].dropna().unique())
         default_well = wells_all[0] if len(wells_all) else "(none)"
-        
-        # --- If navigated from Rate Change Alerts via ?ts_well=..., override default_well ---
-        qp = st.experimental_get_query_params()
-        ts_from_link = None
-        if "ts_well" in qp:
-            ts_from_link = qp["ts_well"][0] if isinstance(qp["ts_well"], list) else qp["ts_well"]
-        if ts_from_link and ts_from_link in wells_all:
-            default_well = ts_from_link
-            # also prime the widget state so the selectbox shows it immediately
-            st.session_state["ts_well"] = ts_from_link
 
         if "Act. Nett (bopd)" in df.columns and len(wells_all):
             month_df = df[(df["Year"] == sel_year) & (df["Month"] == sel_month)].copy()
@@ -952,8 +917,3 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
-
-
-
-
-
