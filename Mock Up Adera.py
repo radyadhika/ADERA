@@ -699,26 +699,61 @@ with tabs[2]:
                             fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
                             safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
                         
-# ================= Time Series Visualization Tab (dual y-axis: liquid vs gas) =================
+# ================= Time Series Visualization Tab (dual y-axis + default = monthly top oil producer) =================
 with tabs[3]:
     st.header("Time Series Visualization")
 
     if not have("Well", "Date"):
         st.info("Need 'Well' and 'Date' columns.")
     else:
-        wells_ts = sorted(df['Well'].dropna().unique())
-        well_sel = st.selectbox("Select Well", wells_ts if len(wells_ts) else ["(none)"])
+        # --- Figure out the "current month" from Statistics tab (auto-latest as fallback) ---
+        latest_dt = pd.to_datetime(df["Date"], errors="coerce").max()
+        fallback_year  = int(latest_dt.year) if pd.notna(latest_dt) else int(pd.Timestamp.today().year)
+        fallback_month = int(latest_dt.month) if pd.notna(latest_dt) else int(pd.Timestamp.today().month)
+
+        sel_year  = st.session_state.get("stat_year",  fallback_year)
+        sel_month = st.session_state.get("stat_month", fallback_month)
+
+        # If stats widgets weren’t created (edge cases), still guard types
+        try:
+            sel_year = int(sel_year)
+        except Exception:
+            sel_year = fallback_year
+        try:
+            sel_month = int(sel_month)
+        except Exception:
+            sel_month = fallback_month
+
+        # --- Compute Top-1 oil producer of that month (same logic as Statistics: latest-per-well, then sort by Act. Nett) ---
+        wells_all = sorted(df["Well"].dropna().unique())
+        default_well = wells_all[0] if len(wells_all) else "(none)"
+
+        if "Act. Nett (bopd)" in df.columns and len(wells_all):
+            month_df = df[(df["Year"] == sel_year) & (df["Month"] == sel_month)].copy()
+            if len(month_df):
+                latest_per_well = (
+                    month_df.dropna(subset=["Well", "Date"])
+                            .sort_values("Date")
+                            .groupby("Well", as_index=False)
+                            .last()
+                )
+                latest_per_well = latest_per_well.sort_values("Act. Nett (bopd)", ascending=False)
+                if len(latest_per_well) and not pd.isna(latest_per_well.iloc[0]["Well"]):
+                    default_well = latest_per_well.iloc[0]["Well"]
+
+        # --- Well selector defaulting to Top-1 oil producer this month ---
+        wells_ts = wells_all
+        default_index = wells_ts.index(default_well) if default_well in wells_ts else 0
+        well_sel = st.selectbox("Select Well", wells_ts if len(wells_ts) else ["(none)"], index=default_index, key="ts_well")
 
         d = df[df['Well'] == well_sel].sort_values("Date")
         if len(d):
             from plotly.subplots import make_subplots
 
-            # Default series (robust to either bfpd or bopd for Gross)
+            # Default series (support both bopd & bfpd for Gross)
             col_oil = "Act. Nett (bopd)" if "Act. Nett (bopd)" in d.columns else None
-            col_liq = (
-                "Act. Gross (bopd)" if "Act. Gross (bopd)" in d.columns
-                else ("Act. Gross (bfpd)" if "Act. Gross (bfpd)" in d.columns else None)
-            )
+            col_liq = ("Act. Gross (bopd)" if "Act. Gross (bopd)" in d.columns
+                       else ("Act. Gross (bfpd)" if "Act. Gross (bfpd)" in d.columns else None))
             col_gas = "Act. Gas Prod (MMscfd)" if "Act. Gas Prod (MMscfd)" in d.columns else None
 
             if not any([col_oil, col_liq, col_gas]):
@@ -731,7 +766,7 @@ with tabs[3]:
                     fig.add_trace(
                         go.Scatter(
                             x=d["Date"], y=d[col_liq], name=col_liq,
-                            mode="lines+markers", line=dict(color="#1f77b4")  # blue
+                            mode="lines+markers", line=dict(color="#1f77b4")  # blue (liquid gross)
                         ),
                         secondary_y=False
                     )
@@ -739,7 +774,7 @@ with tabs[3]:
                     fig.add_trace(
                         go.Scatter(
                             x=d["Date"], y=d[col_oil], name=col_oil,
-                            mode="lines+markers", line=dict(color="#2ca02c")  # green
+                            mode="lines+markers", line=dict(color="#2ca02c")  # green (oil net)
                         ),
                         secondary_y=False
                     )
@@ -749,13 +784,13 @@ with tabs[3]:
                     fig.add_trace(
                         go.Scatter(
                             x=d["Date"], y=d[col_gas], name=col_gas,
-                            mode="lines+markers", line=dict(color="#d62728")  # red
+                            mode="lines+markers", line=dict(color="#d62728")  # red (gas)
                         ),
                         secondary_y=True
                     )
 
                 fig.update_layout(
-                    title=f"Liquid vs Gas — {well_sel}",
+                    title=f"Liquid vs Gas — {well_sel} ({sel_month}/{sel_year})",
                     xaxis_title="Date",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
@@ -882,5 +917,6 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
