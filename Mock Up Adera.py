@@ -500,7 +500,7 @@ with tabs[2]:
 
     # ---- Metric & Category (only show existing) ----
     metric = st.selectbox(
-        "Metric (absolute values are used for Pareto accumulation)",
+        "Metric Type",
         [m for m in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Down Time"] if m in df.columns] or ["Act. Nett (bopd)"]
     )
     category = st.selectbox(
@@ -699,7 +699,7 @@ with tabs[2]:
                             fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
                             safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
                         
-# ================= Time Series Visualization Tab =================
+# ================= Time Series Visualization Tab (dual y-axis: liquid vs gas) =================
 with tabs[3]:
     st.header("Time Series Visualization")
 
@@ -709,20 +709,60 @@ with tabs[3]:
         wells_ts = sorted(df['Well'].dropna().unique())
         well_sel = st.selectbox("Select Well", wells_ts if len(wells_ts) else ["(none)"])
 
-        series_options = [c for c in [
-            "Act. Nett (bopd)", "Act. Gross (bfpd)", "Act. Gas Prod (MMscfd)",
-            "Pot. Nett (bopd)", "Pot. Gross (bfpd)",
-            "Pcsg", "Ptbg", "Pfl", "Psep", "Pump Eff (%)", "Choke"
-        ] if c in df.columns]
-        y_cols = st.multiselect("Select series to plot", series_options, default=[s for s in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)"] if s in series_options])
-
         d = df[df['Well'] == well_sel].sort_values("Date")
-        if len(d) and len(y_cols):
-            fig = go.Figure()
-            for c in y_cols:
-                fig.add_trace(go.Scatter(x=d["Date"], y=d[c], mode="lines+markers", name=c))
-            fig.update_layout(title=f"Time Series — {well_sel}", xaxis_title="Date", yaxis_title="Value")
-            safe_download_buttons_for_fig(fig, f"time_series_{well_sel}", "ts")
+        if len(d):
+            from plotly.subplots import make_subplots
+
+            # Default series (robust to either bfpd or bopd for Gross)
+            col_oil = "Act. Nett (bopd)" if "Act. Nett (bopd)" in d.columns else None
+            col_liq = (
+                "Act. Gross (bopd)" if "Act. Gross (bopd)" in d.columns
+                else ("Act. Gross (bfpd)" if "Act. Gross (bfpd)" in d.columns else None)
+            )
+            col_gas = "Act. Gas Prod (MMscfd)" if "Act. Gas Prod (MMscfd)" in d.columns else None
+
+            if not any([col_oil, col_liq, col_gas]):
+                st.info("None of the default series are available for this dataset.")
+            else:
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                # Liquid (LEFT axis)
+                if col_liq:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d["Date"], y=d[col_liq], name=col_liq,
+                            mode="lines+markers", line=dict(color="#1f77b4")  # blue
+                        ),
+                        secondary_y=False
+                    )
+                if col_oil:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d["Date"], y=d[col_oil], name=col_oil,
+                            mode="lines+markers", line=dict(color="#2ca02c")  # green
+                        ),
+                        secondary_y=False
+                    )
+
+                # Gas (RIGHT axis)
+                if col_gas:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d["Date"], y=d[col_gas], name=col_gas,
+                            mode="lines+markers", line=dict(color="#d62728")  # red
+                        ),
+                        secondary_y=True
+                    )
+
+                fig.update_layout(
+                    title=f"Liquid vs Gas — {well_sel}",
+                    xaxis_title="Date",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                fig.update_yaxes(title_text="Liquid rate (bopd/bfpd)", secondary_y=False)
+                fig.update_yaxes(title_text="Gas rate (MMscfd)", secondary_y=True)
+
+                safe_download_buttons_for_fig(fig, f"time_series_{well_sel}", "ts_dual")
 
 # ================= Anomaly Detection Tab =================
 with tabs[4]:
@@ -842,4 +882,5 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
