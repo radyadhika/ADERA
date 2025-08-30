@@ -855,7 +855,7 @@ with tabs[3]:
                     fig.add_trace(
                         go.Scatter(
                             x=d["Date"], y=d[col_liq], name=col_liq,
-                            mode="lines+markers", line=dict(color="#1f77b4")  # blue (liquid gross)
+                            mode="lines+markers", line=dict(color="#1f77b4")
                         ),
                         secondary_y=False
                     )
@@ -863,7 +863,7 @@ with tabs[3]:
                     fig.add_trace(
                         go.Scatter(
                             x=d["Date"], y=d[col_oil], name=col_oil,
-                            mode="lines+markers", line=dict(color="#2ca02c")  # green (oil net)
+                            mode="lines+markers", line=dict(color="#2ca02c")
                         ),
                         secondary_y=False
                     )
@@ -873,18 +873,35 @@ with tabs[3]:
                     fig.add_trace(
                         go.Scatter(
                             x=d["Date"], y=d[col_gas], name=col_gas,
-                            mode="lines+markers", line=dict(color="#d62728")  # red (gas)
+                            mode="lines+markers", line=dict(color="#d62728")
                         ),
                         secondary_y=True
                     )
+
+                # --- Force y-axes to start at 0 (compute sensible maxima) ---
+                def _safe_axis_max(series_list):
+                    try:
+                        vals = pd.concat(
+                            [pd.to_numeric(s, errors="coerce") for s in series_list if s is not None],
+                            axis=0
+                        )
+                        m = float(np.nanmax(vals)) if len(vals) else 0.0
+                    except Exception:
+                        m = 0.0
+                    # fallback to 1 to avoid [0,0] ranges; add headroom
+                    return 1.0 if (not np.isfinite(m) or m <= 0) else m * 1.1
+
+                left_max  = _safe_axis_max([d[col_liq] if col_liq else None,
+                                            d[col_oil] if col_oil else None])
+                right_max = _safe_axis_max([d[col_gas] if col_gas else None])
 
                 fig.update_layout(
                     title=f"Liquid vs Gas — {well_sel}",
                     xaxis_title="Date",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
-                fig.update_yaxes(title_text="Liquid rate (bopd/bfpd)", secondary_y=False)
-                fig.update_yaxes(title_text="Gas rate (MMscfd)", secondary_y=True)
+                fig.update_yaxes(title_text="Liquid rate (bopd/bfpd)", secondary_y=False, range=[0, left_max])
+                fig.update_yaxes(title_text="Gas rate (MMscfd)",      secondary_y=True,  range=[0, right_max])
 
                 safe_download_buttons_for_fig(fig, f"time_series_{well_sel}", "ts_dual")
 
@@ -1006,8 +1023,3 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
-
-
-
-
-
