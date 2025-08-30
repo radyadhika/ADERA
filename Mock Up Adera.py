@@ -1,4 +1,6 @@
-# Adera Data Dashboard — resilient version (fixes KeyError)
+# Credit: 
+# Radya Evandhika Novaldi
+# Jr. Engineer Petroleum - Zona 4
 # --------------------------------------------------------------
 import re
 import streamlit as st
@@ -186,22 +188,46 @@ tabs = st.tabs([
 def have(*cols):
     return all(c in df.columns for c in cols)
 
-# ================= Statistics Tab =================
+# ==== DROP-IN REPLACEMENT: Statistics tab (auto-select latest month) ====
 with tabs[0]:
     st.header('Statistics')
 
     if not have("Well", "Date"):
         st.warning("Columns 'Well' and/or 'Date' are missing; cannot compute statistics.")
     else:
-        # Year / Month selection
-        st.subheader("Select Month and Year for Analysis")
-        avail_years = sorted(df['Year'].dropna().unique(), reverse=True)
-        selected_year_stat = st.selectbox("Select Year", avail_years if len(avail_years) else [np.nan], key="stat_year")
-        months_for_year = sorted(df[df['Year'] == selected_year_stat]['Month'].dropna().unique())
-        selected_month_stat = st.selectbox("Select Month", months_for_year if len(months_for_year) else [np.nan], key="stat_month")
+        # Determine latest available date in data (fallback to today if none)
+        latest_dt = pd.to_datetime(df['Date'], errors='coerce').max()
+        latest_year = int(latest_dt.year) if pd.notna(latest_dt) else int(pd.Timestamp.today().year)
+        latest_month = int(latest_dt.month) if pd.notna(latest_dt) else int(pd.Timestamp.today().month)
 
-        # Top-N selector
-        top_n = st.selectbox("Select number of top producers", [3, 5, 10, 20], index=3, key="stat_top_n")
+        # Year / Month selections default to latest available
+        st.subheader("Select Month and Year for Analysis")
+        avail_years_raw = sorted(df['Year'].dropna().unique(), reverse=True)
+        avail_years = [int(y) for y in avail_years_raw] if len(avail_years_raw) else []
+        year_index = 0 if (len(avail_years) and latest_year in avail_years) else 0
+        selected_year_stat = st.selectbox(
+            "Select Year",
+            avail_years if len(avail_years) else [np.nan],
+            index=year_index,
+            key="stat_year",
+        )
+
+        months_for_year_raw = sorted(df[df['Year'] == selected_year_stat]['Month'].dropna().unique())
+        months_for_year = [int(m) for m in months_for_year_raw] if len(months_for_year_raw) else []
+        if len(months_for_year):
+            if selected_year_stat == latest_year and latest_month in months_for_year:
+                month_index = months_for_year.index(latest_month)
+            else:
+                # default to latest month available within the selected year
+                month_index = len(months_for_year) - 1
+        else:
+            month_index = 0
+        selected_month_stat = st.selectbox(
+            "Select Month",
+            months_for_year if len(months_for_year) else [np.nan],
+            index=month_index if len(months_for_year) else 0,
+            key="stat_month",
+        )
 
         # Filter to month/year and take latest test per well
         stat_df = df.copy()
@@ -259,15 +285,13 @@ with tabs[0]:
             # --- Top Oil ---
             st.subheader("Top Oil Producers")
             if "Act. Nett (bopd)" in stat_df.columns:
-                top_oil = stat_df.sort_values("Act. Nett (bopd)", ascending=False).head(top_n)
-            
-                peak_oil_col = "Peak Oil (bopd)" if "Peak Oil (bopd)" in top_oil.columns else "Act. Nett (bopd)"
+                top_oil = stat_df.sort_values("Act. Nett (bopd)", ascending=False).head(20)
+                peak_oil_col = "Peak Oil (bopd)" if "Peak Oil (bopd)" in stat_df.columns else "Act. Nett (bopd)"
                 display_cols = safe_cols(
                     top_oil,
                     ["Well", "Structure", "Act. Nett (bopd)", peak_oil_col, "Well Lifespan"]
                 )
                 st.dataframe(top_oil[display_cols])
-            
                 oil_fig = px.bar(top_oil, x="Well", y="Act. Nett (bopd)", color="Structure" if "Structure" in top_oil.columns else None,
                                  title="Top Oil Producers")
                 safe_download_buttons_for_fig(oil_fig, "top_oil_producers", "stat_oil")
@@ -277,22 +301,21 @@ with tabs[0]:
             # --- Top Gas ---
             st.subheader("Top Gas Producers")
             if "Act. Gas Prod (MMscfd)" in stat_df.columns:
-                top_gas = stat_df.sort_values("Act. Gas Prod (MMscfd)", ascending=False).head(top_n)
-            
-                peak_gas_col = "Peak Gas (MMscfd)" if "Peak Gas (MMscfd)" in top_gas.columns else "Act. Gas Prod (MMscfd)"
+                top_gas = stat_df.sort_values("Act. Gas Prod (MMscfd)", ascending=False).head(20)
+                peak_gas_col = "Peak Gas (MMscfd)" if "Peak Gas (MMscfd)" in stat_df.columns else "Act. Gas Prod (MMscfd)"
                 display_cols = safe_cols(
                     top_gas,
                     ["Well", "Structure", "Act. Gas Prod (MMscfd)", peak_gas_col, "Well Lifespan"]
                 )
                 st.dataframe(top_gas[display_cols])
-            
                 gas_fig = px.bar(top_gas, x="Well", y="Act. Gas Prod (MMscfd)", color="Structure" if "Structure" in top_gas.columns else None,
                                  title="Top Gas Producers")
                 safe_download_buttons_for_fig(gas_fig, "top_gas_producers", "stat_gas")
             else:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
-# ================= Rate Change Alerts Tab (UPDATED — No min points; compare latest-in-range vs previous overall, optional Recover filter) =================
+
+# ==== DROP-IN REPLACEMENT: Rate Change Alerts (stacked tables; all rows in window vs previous) ====
 with tabs[1]:
     st.header("Rate Change Alerts")
 
@@ -312,15 +335,13 @@ with tabs[1]:
             if start_date > end_date:
                 st.warning("Start date must be <= end date.")
             else:
-                wells = sorted(df['Well'].dropna().unique())
-
                 # --- Recover filter option ---
                 include_recover = st.checkbox(
                     "Include wells with Lifting Method = 'Recover'",
                     value=False,
                     help=(
                         "When unticked (default), any rows where Lifting Method == 'Recover' are ignored "
-                        "for both the in-window latest point and the previous comparison point."
+                        "for both the in-window rows and their previous comparison rows."
                     ),
                 )
 
@@ -343,8 +364,7 @@ with tabs[1]:
 
                 if threshold_mode == "Percent (%)":
                     pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
-                    oil_abs_threshold = None
-                    gas_abs_threshold = None
+                    oil_abs_threshold = gas_abs_threshold = None
                 else:
                     st.caption("Absolute thresholds use original units: bopd for oil, MMscfd for gas.")
                     oil_abs_threshold = st.number_input(
@@ -355,123 +375,106 @@ with tabs[1]:
                     )
                     pct_threshold = None
 
-                # Helper funcs
-                def pct_change(a, b):
-                    if pd.isna(a) or pd.isna(b) or b == 0:
-                        return np.nan
-                    return 100.0 * (a - b) / abs(b)
+                # ----- Helpers (vectorized) -----
+                def pct_change_series(a: pd.Series, b: pd.Series) -> pd.Series:
+                    a = pd.to_numeric(a, errors='coerce')
+                    b = pd.to_numeric(b, errors='coerce')
+                    out = (a - b).divide(b.abs()) * 100.0
+                    out[(b == 0) | b.isna() | a.isna()] = np.nan
+                    return out
 
-                def abs_change(a, b):
-                    if pd.isna(a) or pd.isna(b):
-                        return np.nan
-                    return a - b
+                def abs_change_series(a: pd.Series, b: pd.Series) -> pd.Series:
+                    a = pd.to_numeric(a, errors='coerce')
+                    b = pd.to_numeric(b, errors='coerce')
+                    out = a - b
+                    out[a.isna() | b.isna()] = np.nan
+                    return out
 
-                oil_alerts = []
-                gas_alerts = []
+                # ---- Build working frame (Recover-filtered, sorted) ----
+                work = filter_recover(df.copy())
+                work = work.dropna(subset=["Well", "Date"]).sort_values(["Well", "Date"]).copy()
 
-                # Iterate wells
-                for w in wells:
-                    d_all_raw = df[df['Well'] == w].sort_values('Date')
-                    d_all = filter_recover(d_all_raw)
+                has_oil = "Act. Nett (bopd)" in work.columns
+                has_gas = "Act. Gas Prod (MMscfd)" in work.columns
+                has_choke = "Choke" in work.columns
 
-                    # rows inside the window for this well (already Recover-filtered if applied)
-                    d_in = d_all[(d_all['Date'].dt.date >= start_date) & (d_all['Date'].dt.date <= end_date)]
-                    if d_in.empty:
-                        continue  # no in-window non-Recover data → skip
+                # Previous row per well (overall, even if before window)
+                g = work.groupby("Well", group_keys=False)
+                work["Prev Date"] = g["Date"].shift(1)
+                if has_oil:
+                    work["Prev Oil (bopd)"] = g["Act. Nett (bopd)"].shift(1)
+                if has_gas:
+                    work["Prev Gas (MMscfd)"] = g["Act. Gas Prod (MMscfd)"].shift(1)
+                if has_choke:
+                    work["Prev Choke"] = g["Choke"].shift(1)
 
-                    # latest in-window row
-                    last = d_in.iloc[-1]
+                # Keep only rows inside window for comparison output
+                in_window = work[(work["Date"].dt.date >= start_date) & (work["Date"].dt.date <= end_date)].copy()
+                in_window = in_window.rename(columns={"Date": "Last Date"})
 
-                    # previous test overall (can be before the window); also Recover-filtered if applied
-                    prev_candidates = d_all[d_all['Date'] < last['Date']]
-                    if prev_candidates.empty:
-                        continue  # no previous non-Recover test exists → cannot form a pair
-                    prev = prev_candidates.iloc[-1]
+                # Compute deltas
+                if has_oil:
+                    in_window["Last Oil (bopd)"] = in_window["Act. Nett (bopd)"]
+                    in_window["Oil Δ%"] = pct_change_series(in_window["Last Oil (bopd)"], in_window["Prev Oil (bopd)"])
+                    in_window["Oil Δ abs"] = abs_change_series(in_window["Last Oil (bopd)"], in_window["Prev Oil (bopd)"])
+                if has_gas:
+                    in_window["Last Gas (MMscfd)"] = in_window["Act. Gas Prod (MMscfd)"]
+                    in_window["Gas Δ%"] = pct_change_series(in_window["Last Gas (MMscfd)"], in_window["Prev Gas (MMscfd)"])
+                    in_window["Gas Δ abs"] = abs_change_series(in_window["Last Gas (MMscfd)"] , in_window["Prev Gas (MMscfd)"])
+                if has_choke:
+                    in_window["Choke Δ%"] = pct_change_series(in_window["Choke"], in_window["Prev Choke"])  # info only
 
-                    # Extract values
-                    last_oil = last.get("Act. Nett (bopd)")
-                    prev_oil = prev.get("Act. Nett (bopd)")
-                    last_gas = last.get("Act. Gas Prod (MMscfd)")
-                    prev_gas = prev.get("Act. Gas Prod (MMscfd)")
-                    last_choke = last.get("Choke")
-                    prev_choke = prev.get("Choke")
+                # ---- Oil table (stacked first) ----
+                if has_oil:
+                    oil_cols = [
+                        "Well", "Structure", "Prev Date", "Last Date",
+                        "Prev Oil (bopd)", "Last Oil (bopd)", "Lifting Method", "Pump Eff (%)",
+                    ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
 
-                    # Compute changes
-                    oil_pct = pct_change(last_oil, prev_oil)
-                    gas_pct = pct_change(last_gas, prev_gas)
-                    choke_pct = pct_change(last_choke, prev_choke)
-
-                    oil_abs = abs_change(last_oil, prev_oil)
-                    gas_abs = abs_change(last_gas, prev_gas)
-
-                    # Flagging logic per mode
+                    oil_view = in_window.dropna(subset=["Prev Oil (bopd)"])  # need a previous point
                     if threshold_mode == "Percent (%)":
-                        oil_flag = (not pd.isna(oil_pct)) and abs(oil_pct) >= pct_threshold
-                        gas_flag = (not pd.isna(gas_pct)) and abs(gas_pct) >= pct_threshold
-                        oil_delta, gas_delta = oil_pct, gas_pct
-                        oil_delta_label, gas_delta_label = "%", "%"
+                        oil_view = oil_view[oil_view["Oil Δ%"].abs() >= pct_threshold]
+                        oil_view = oil_view.assign(**{"Oil Δ": oil_view["Oil Δ%"], "Δ Type": "%"})
                     else:
-                        oil_flag = (not pd.isna(oil_abs)) and abs(oil_abs) >= float(oil_abs_threshold)
-                        gas_flag = (not pd.isna(gas_abs)) and abs(gas_abs) >= float(gas_abs_threshold)
-                        oil_delta, gas_delta = oil_abs, gas_abs
-                        oil_delta_label, gas_delta_label = "abs (bopd)", "abs (MMscfd)"
+                        oil_view = oil_view[oil_view["Oil Δ abs"].abs() >= float(oil_abs_threshold)]
+                        oil_view = oil_view.assign(**{"Oil Δ": oil_view["Oil Δ abs"], "Δ Type": "abs (bopd)"})
 
-                    base_row = {
-                        "Well": w,
-                        "Structure": last.get("Structure", np.nan),
-                        "Prev Date": prev.get("Date", np.nan),
-                        "Last Date": last.get("Date", np.nan),
-                        # Context
-                        "Lifting Method": last.get("Lifting Method", np.nan),
-                        "Pump Eff (%)": last.get("Pump Eff (%)", np.nan),
-                        # Choke info
-                        "Prev Choke": prev_choke,
-                        "Last Choke": last_choke,
-                        "Choke Δ%": choke_pct,
-                    }
+                    oil_display = safe_cols(oil_view, oil_cols + ["Oil Δ", "Δ Type"])  
+                    oil_out = oil_view[oil_display].sort_values("Last Date", ascending=False)
 
-                    if oil_flag:
-                        oil_row = base_row.copy()
-                        oil_row.update({
-                            "Prev Oil (bopd)": prev_oil,
-                            "Last Oil (bopd)": last_oil,
-                            "Oil Δ": oil_delta,
-                            "Δ Type": oil_delta_label,
-                        })
-                        oil_alerts.append(oil_row)
-
-                    if gas_flag:
-                        gas_row = base_row.copy()
-                        gas_row.update({
-                            "Prev Gas (MMscfd)": prev_gas,
-                            "Last Gas (MMscfd)": last_gas,
-                            "Gas Δ": gas_delta,
-                            "Δ Type": gas_delta_label,
-                        })
-                        gas_alerts.append(gas_row)
-
-                # --- Render tables ---
-                col_oil, col_gas = st.columns(2)
-
-                with col_oil:
                     st.subheader("Oil Alerts")
-                    if oil_alerts:
-                        oil_df = pd.DataFrame(oil_alerts)
-                        if "Last Date" in oil_df.columns:
-                            oil_df = oil_df.sort_values("Last Date", ascending=False)
-                        st.dataframe(oil_df)
+                    if len(oil_out):
+                        st.dataframe(oil_out)
                     else:
                         st.success("No oil wells crossed the threshold for the selected window.")
+                else:
+                    st.info("Column 'Act. Nett (bopd)' not found.")
 
-                with col_gas:
+                # ---- Gas table (stacked second) ----
+                if has_gas:
+                    gas_cols = [
+                        "Well", "Structure", "Prev Date", "Last Date",
+                        "Prev Gas (MMscfd)", "Last Gas (MMscfd)", "Lifting Method", "Pump Eff (%)",
+                    ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
+
+                    gas_view = in_window.dropna(subset=["Prev Gas (MMscfd)"])  # need a previous point
+                    if threshold_mode == "Percent (%)":
+                        gas_view = gas_view[gas_view["Gas Δ%"].abs() >= pct_threshold]
+                        gas_view = gas_view.assign(**{"Gas Δ": gas_view["Gas Δ%"], "Δ Type": "%"})
+                    else:
+                        gas_view = gas_view[gas_view["Gas Δ abs"].abs() >= float(gas_abs_threshold)]
+                        gas_view = gas_view.assign(**{"Gas Δ": gas_view["Gas Δ abs"], "Δ Type": "abs (MMscfd)"})
+
+                    gas_display = safe_cols(gas_view, gas_cols + ["Gas Δ", "Δ Type"])  
+                    gas_out = gas_view[gas_display].sort_values("Last Date", ascending=False)
+
                     st.subheader("Gas Alerts")
-                    if gas_alerts:
-                        gas_df = pd.DataFrame(gas_alerts)
-                        if "Last Date" in gas_df.columns:
-                            gas_df = gas_df.sort_values("Last Date", ascending=False)
-                        st.dataframe(gas_df)
+                    if len(gas_out):
+                        st.dataframe(gas_out)
                     else:
                         st.success("No gas wells crossed the threshold for the selected window.")
+                else:
+                    st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
 # ================= Pareto Chart Tab =================
 with tabs[2]:
@@ -758,6 +761,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
