@@ -686,29 +686,16 @@ with tabs[2]:
                             y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
                             fig.add_bar(x=cat_order, y=y_vals, name=str(s))
                     else:
-                        # Single series (no stacking when category == "Structure") — color bars per category
+                        # Single series when category == "Structure" — let Plotly assign default colors per trace
                         y_by_cat = totals.set_index("cat_key")["cat_total"].to_dict()
-                        palette = px.colors.qualitative.Plotly
-                        color_map = {c: palette[i % len(palette)] for i, c in enumerate(cat_order)}
                         
-                        if len(cat_order) <= 12:
-                            # one trace per category → shows a readable legend
-                            for c in cat_order:
-                                fig.add_bar(
-                                    x=[c],
-                                    y=[float(y_by_cat[c])],
-                                    name=str(c),
-                                    marker_color=color_map[c],
-                                    showlegend=True,
-                                )
-                        else:
-                            # many categories → single trace with per-bar colors, hide legend to avoid clutter
+                        max_legend = 20  # keep the legend readable; tweak as you like
+                        for i, c in enumerate(cat_order):
                             fig.add_bar(
-                                x=cat_order,
-                                y=[float(y_by_cat[c]) for c in cat_order],
-                                marker=dict(color=[color_map[c] for c in cat_order]),
-                                name=str(category),
-                                showlegend=False,
+                                x=[c],
+                                y=[float(y_by_cat[c])],
+                                name=str(c),
+                                showlegend=(i < max_legend),  # hide legend entries after N, but colors still apply
                             )
                 
                     totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
@@ -797,41 +784,28 @@ with tabs[2]:
                                     y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
                                     fig.add_bar(x=cat_order, y=y_vals, name=str(s))
                             else:
-                                # Single series (no stacking when category == "Structure") — color bars per category
+                                # Single series when category == "Structure" — let Plotly assign default colors per trace
                                 y_by_cat = totals.set_index("cat_key")["cat_total"].to_dict()
-                                palette = px.colors.qualitative.Plotly
-                                color_map = {c: palette[i % len(palette)] for i, c in enumerate(cat_order)}
                                 
-                                if len(cat_order) <= 12:
-                                    # one trace per category → shows a readable legend
-                                    for c in cat_order:
-                                        fig.add_bar(
-                                            x=[c],
-                                            y=[float(y_by_cat[c])],
-                                            name=str(c),
-                                            marker_color=color_map[c],
-                                            showlegend=True,
-                                        )
-                                else:
-                                    # many categories → single trace with per-bar colors, hide legend to avoid clutter
+                                max_legend = 20  # keep the legend readable; tweak as you like
+                                for i, c in enumerate(cat_order):
                                     fig.add_bar(
-                                        x=cat_order,
-                                        y=[float(y_by_cat[c]) for c in cat_order],
-                                        marker=dict(color=[color_map[c] for c in cat_order]),
-                                        name=str(category),
-                                        showlegend=False,
+                                        x=[c],
+                                        y=[float(y_by_cat[c])],
+                                        name=str(c),
+                                        showlegend=(i < max_legend),  # hide legend entries after N, but colors still apply
                                     )
-                
-                            totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
-                            totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
-                
-                            fig.add_scatter(
-                                x=cat_order,
-                                y=totals_ordered["cumperc"],
-                                name="Cumulative %",
-                                yaxis="y2",
-                                mode="lines+markers",
-                            )
+                        
+                                    totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
+                                    totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
+                        
+                                    fig.add_scatter(
+                                        x=cat_order,
+                                        y=totals_ordered["cumperc"],
+                                        name="Cumulative %",
+                                        yaxis="y2",
+                                        mode="lines+markers",
+                                    )
                 
                             fig.update_layout(
                                 title=f"Pareto of {metric} by {category} — {title_suffix}",
@@ -1250,6 +1224,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
