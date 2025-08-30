@@ -159,14 +159,40 @@ def _activate_tab(tab_label: str):
     </script>
     """, height=0)
 
-# If we came in with a jump request (?ts_well=...&go_ts=1), set the well and switch tabs immediately
-_qp = st.query_params()
-if "ts_well" in _qp:
-    _tsw = _qp["ts_well"][0] if isinstance(_qp["ts_well"], list) else _qp["ts_well"]
-    st.session_state["ts_well"] = _tsw  # preselect in the TS selectbox
-    if _qp.get("go_ts", ["0"])[0] == "1":
-        _activate_tab("Time Series Visualization")
+# If we came in with a jump request (?ts_well=...&go_ts=1), set the well and switch tabs
+def _get_params():
+    # Streamlit ≥ 1.30: st.query_params (property)
+    if hasattr(st, "query_params"):
+        qp = st.query_params
+        def _get1(key, default=None):
+            v = qp.get(key, default)
+            # normalize to single string
+            return v[0] if isinstance(v, list) and v else (v if v is not None else default)
+        return _get1("ts_well"), _get1("go_ts", "0"), qp
+    # Older Streamlit: experimental_* functions
+    else:
+        qp = st.experimental_get_query_params()
+        def _get1(key, default=None):
+            v = qp.get(key, [default])
+            return v[0] if isinstance(v, list) else v
+        return _get1("ts_well"), _get1("go_ts", "0"), qp
 
+_tsw, _go, _qp_obj = _get_params()
+
+if _tsw:
+    st.session_state["ts_well"] = _tsw  # preselect in the TS selectbox
+    if str(_go) == "1":
+        _activate_tab("Time Series Visualization")
+        # Clear the one-shot flag but keep ts_well
+        try:
+            if hasattr(st, "query_params"):
+                st.query_params["ts_well"] = _tsw
+                if "go_ts" in st.query_params:
+                    del st.query_params["go_ts"]
+            else:
+                st.experimental_set_query_params(ts_well=_tsw)
+        except Exception:
+            pass
 
 # =========================
 # Data load & prep
@@ -980,6 +1006,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
