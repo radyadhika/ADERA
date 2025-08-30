@@ -2,6 +2,7 @@
 # Radya Evandhika Novaldi
 # Jr. Engineer Petroleum - Zona 4
 # --------------------------------------------------------------
+# Library
 import re
 import streamlit as st
 import pandas as pd
@@ -17,6 +18,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 from urllib.parse import quote
+from plotly import express as px
 
 # =========================
 # Page config
@@ -684,9 +686,30 @@ with tabs[2]:
                             y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
                             fig.add_bar(x=cat_order, y=y_vals, name=str(s))
                     else:
-                        # Single series (no stacking when category == "Structure")
-                        y_vals = [float(totals.set_index("cat_key").loc[c, "cat_total"]) for c in cat_order]
-                        fig.add_bar(x=cat_order, y=y_vals, name=str(category))
+                        # Single series (no stacking when category == "Structure") — color bars per category
+                        y_by_cat = totals.set_index("cat_key")["cat_total"].to_dict()
+                        palette = px.colors.qualitative.Plotly
+                        color_map = {c: palette[i % len(palette)] for i, c in enumerate(cat_order)}
+                        
+                        if len(cat_order) <= 12:
+                            # one trace per category → shows a readable legend
+                            for c in cat_order:
+                                fig.add_bar(
+                                    x=[c],
+                                    y=[float(y_by_cat[c])],
+                                    name=str(c),
+                                    marker_color=color_map[c],
+                                    showlegend=True,
+                                )
+                        else:
+                            # many categories → single trace with per-bar colors, hide legend to avoid clutter
+                            fig.add_bar(
+                                x=cat_order,
+                                y=[float(y_by_cat[c]) for c in cat_order],
+                                marker=dict(color=[color_map[c] for c in cat_order]),
+                                name=str(category),
+                                showlegend=False,
+                            )
                 
                     totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
                     totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
@@ -774,8 +797,30 @@ with tabs[2]:
                                     y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
                                     fig.add_bar(x=cat_order, y=y_vals, name=str(s))
                             else:
-                                y_vals = [float(totals.set_index("cat_key").loc[c, "cat_total"]) for c in cat_order]
-                                fig.add_bar(x=cat_order, y=y_vals, name=str(category))
+                                # Single series (no stacking when category == "Structure") — color bars per category
+                                y_by_cat = totals.set_index("cat_key")["cat_total"].to_dict()
+                                palette = px.colors.qualitative.Plotly
+                                color_map = {c: palette[i % len(palette)] for i, c in enumerate(cat_order)}
+                                
+                                if len(cat_order) <= 12:
+                                    # one trace per category → shows a readable legend
+                                    for c in cat_order:
+                                        fig.add_bar(
+                                            x=[c],
+                                            y=[float(y_by_cat[c])],
+                                            name=str(c),
+                                            marker_color=color_map[c],
+                                            showlegend=True,
+                                        )
+                                else:
+                                    # many categories → single trace with per-bar colors, hide legend to avoid clutter
+                                    fig.add_bar(
+                                        x=cat_order,
+                                        y=[float(y_by_cat[c]) for c in cat_order],
+                                        marker=dict(color=[color_map[c] for c in cat_order]),
+                                        name=str(category),
+                                        showlegend=False,
+                                    )
                 
                             totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
                             totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
@@ -1205,6 +1250,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
