@@ -315,7 +315,7 @@ with tabs[0]:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
 
-# ==== DROP-IN REPLACEMENT: Rate Change Alerts (stacked tables; all rows in window vs previous) ====
+# ==== DROP-IN REPLACEMENT: Rate Change Alerts (stacked tables; all rows in window vs previous; date-only; Pot columns; Δ beside Last) ====
 with tabs[1]:
     st.header("Rate Change Alerts")
 
@@ -368,7 +368,7 @@ with tabs[1]:
                 else:
                     st.caption("Absolute thresholds use original units: bopd for oil, MMscfd for gas.")
                     oil_abs_threshold = st.number_input(
-                        "Oil absolute change threshold (bopd)", value=50.0, min_value=0.0, step=10.0
+                        "Oil absolute change threshold (bopd)", value=10.0, min_value=0.0, step=10.0
                     )
                     gas_abs_threshold = st.number_input(
                         "Gas absolute change threshold (MMscfd)", value=0.2, min_value=0.0, step=0.05
@@ -388,6 +388,13 @@ with tabs[1]:
                     b = pd.to_numeric(b, errors='coerce')
                     out = a - b
                     out[a.isna() | b.isna()] = np.nan
+                    return out
+
+                def format_date_cols(df_in: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+                    out = df_in.copy()
+                    for c in cols:
+                        if c in out.columns:
+                            out[c] = pd.to_datetime(out[c], errors='coerce').dt.strftime('%Y-%m-%d')
                     return out
 
                 # ---- Build working frame (Recover-filtered, sorted) ----
@@ -420,15 +427,17 @@ with tabs[1]:
                 if has_gas:
                     in_window["Last Gas (MMscfd)"] = in_window["Act. Gas Prod (MMscfd)"]
                     in_window["Gas Δ%"] = pct_change_series(in_window["Last Gas (MMscfd)"], in_window["Prev Gas (MMscfd)"])
-                    in_window["Gas Δ abs"] = abs_change_series(in_window["Last Gas (MMscfd)"] , in_window["Prev Gas (MMscfd)"])
+                    in_window["Gas Δ abs"] = abs_change_series(in_window["Last Gas (MMscfd)"], in_window["Prev Gas (MMscfd)"])
                 if has_choke:
                     in_window["Choke Δ%"] = pct_change_series(in_window["Choke"], in_window["Prev Choke"])  # info only
 
                 # ---- Oil table (stacked first) ----
                 if has_oil:
-                    oil_cols = [
+                    oil_cols_base = [
                         "Well", "Structure", "Prev Date", "Last Date",
-                        "Prev Oil (bopd)", "Last Oil (bopd)", "Lifting Method", "Pump Eff (%)",
+                        "Prev Oil (bopd)", "Pot. Nett (bopd)", "Last Oil (bopd)",
+                        "Oil Δ", "Δ Type",
+                        "Lifting Method", "Pump Eff (%)",
                     ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
 
                     oil_view = in_window.dropna(subset=["Prev Oil (bopd)"])  # need a previous point
@@ -439,8 +448,12 @@ with tabs[1]:
                         oil_view = oil_view[oil_view["Oil Δ abs"].abs() >= float(oil_abs_threshold)]
                         oil_view = oil_view.assign(**{"Oil Δ": oil_view["Oil Δ abs"], "Δ Type": "abs (bopd)"})
 
-                    oil_display = safe_cols(oil_view, oil_cols + ["Oil Δ", "Δ Type"])  
+                    # Select & order columns safely
+                    oil_display = safe_cols(oil_view, oil_cols_base)
                     oil_out = oil_view[oil_display].sort_values("Last Date", ascending=False)
+
+                    # Format dates as YYYY-MM-DD
+                    oil_out = format_date_cols(oil_out, ["Prev Date", "Last Date"]) 
 
                     st.subheader("Oil Alerts")
                     if len(oil_out):
@@ -452,9 +465,11 @@ with tabs[1]:
 
                 # ---- Gas table (stacked second) ----
                 if has_gas:
-                    gas_cols = [
+                    gas_cols_base = [
                         "Well", "Structure", "Prev Date", "Last Date",
-                        "Prev Gas (MMscfd)", "Last Gas (MMscfd)", "Lifting Method", "Pump Eff (%)",
+                        "Prev Gas (MMscfd)", "Pot. Gas (MMscfd)", "Last Gas (MMscfd)",
+                        "Gas Δ", "Δ Type",
+                        "Lifting Method", "Pump Eff (%)",
                     ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
 
                     gas_view = in_window.dropna(subset=["Prev Gas (MMscfd)"])  # need a previous point
@@ -465,8 +480,11 @@ with tabs[1]:
                         gas_view = gas_view[gas_view["Gas Δ abs"].abs() >= float(gas_abs_threshold)]
                         gas_view = gas_view.assign(**{"Gas Δ": gas_view["Gas Δ abs"], "Δ Type": "abs (MMscfd)"})
 
-                    gas_display = safe_cols(gas_view, gas_cols + ["Gas Δ", "Δ Type"])  
+                    gas_display = safe_cols(gas_view, gas_cols_base)  
                     gas_out = gas_view[gas_display].sort_values("Last Date", ascending=False)
+
+                    # Format dates as YYYY-MM-DD
+                    gas_out = format_date_cols(gas_out, ["Prev Date", "Last Date"]) 
 
                     st.subheader("Gas Alerts")
                     if len(gas_out):
@@ -761,6 +779,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
