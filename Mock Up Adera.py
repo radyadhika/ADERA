@@ -435,7 +435,7 @@ with tabs[1]:
                 if has_oil:
                     oil_cols_base = [
                         "Well", "Structure", "Prev Date", "Last Date",
-                        "Prev Oil (bopd)", "Pot. Nett (bopd)", "Last Oil (bopd)",
+                        "Pot. Nett (bopd)", "Prev Oil (bopd)", "Last Oil (bopd)",
                         "Oil Δ", "Δ Type",
                         "Lifting Method", "Pump Eff (%)",
                     ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
@@ -467,7 +467,7 @@ with tabs[1]:
                 if has_gas:
                     gas_cols_base = [
                         "Well", "Structure", "Prev Date", "Last Date",
-                        "Prev Gas (MMscfd)", "Pot. Gas (MMscfd)", "Last Gas (MMscfd)",
+                        "Pot. Gas (MMscfd)", "Prev Gas (MMscfd)", "Last Gas (MMscfd)",
                         "Gas Δ", "Δ Type",
                         "Lifting Method", "Pump Eff (%)",
                     ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
@@ -779,6 +779,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
