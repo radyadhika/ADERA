@@ -9,11 +9,14 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+import json, urllib.parse
+import streamlit.components.v1 as components
 from io import BytesIO
 from sklearn.ensemble import IsolationForest, RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+from urllib.parse import quote
 
 # =========================
 # Page config
@@ -135,6 +138,35 @@ def rmse_score(y_true, y_pred):
         # Older sklearn fallback
         import numpy as np
         return np.sqrt(mean_squared_error(y_true, y_pred))
+        
+def _activate_tab(tab_label: str):
+    # Auto-click a Streamlit tab whose text matches tab_label.
+    components.html(f"""
+    <script>
+    const target = {json.dumps(tab_label)};
+    function clickIt() {{
+      const tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+      for (const t of tabs) {{
+        if (t.innerText.trim() === target) {{
+          t.click();
+          return;
+        }}
+      }}
+      // If tabs not yet in DOM, retry shortly
+      setTimeout(clickIt, 50);
+    }}
+    clickIt();
+    </script>
+    """, height=0)
+
+# If we came in with a jump request (?ts_well=...&go_ts=1), set the well and switch tabs immediately
+_qp = st.experimental_get_query_params()
+if "ts_well" in _qp:
+    _tsw = _qp["ts_well"][0] if isinstance(_qp["ts_well"], list) else _qp["ts_well"]
+    st.session_state["ts_well"] = _tsw  # preselect in the TS selectbox
+    if _qp.get("go_ts", ["0"])[0] == "1":
+        _activate_tab("Time Series Visualization")
+
 
 # =========================
 # Data load & prep
@@ -454,12 +486,25 @@ with tabs[1]:
 
                     # Format dates as YYYY-MM-DD
                     oil_out = format_date_cols(oil_out, ["Prev Date", "Last Date"]) 
-
+                    
                     st.subheader("Oil Alerts")
                     if len(oil_out):
-                        st.dataframe(oil_out)
+                        oil_out = oil_out.copy()
+                        oil_out["Open TS"] = oil_out["Well"].apply(lambda w: f"?ts_well={quote(str(w))}&go_ts=1")
+                        st.dataframe(
+                            oil_out,
+                            use_container_width=True,
+                            column_config={
+                                "Open TS": st.column_config.LinkColumn(
+                                    label="Open Time Series",
+                                    help="Jump to Time Series Visualization with this well selected",
+                                    display_text="Open TS"
+                                )
+                            }
+                        )
                     else:
                         st.success("No oil wells crossed the threshold for the selected window.")
+
                 else:
                     st.info("Column 'Act. Nett (bopd)' not found.")
 
@@ -485,12 +530,25 @@ with tabs[1]:
 
                     # Format dates as YYYY-MM-DD
                     gas_out = format_date_cols(gas_out, ["Prev Date", "Last Date"]) 
-
+                    
                     st.subheader("Gas Alerts")
                     if len(gas_out):
-                        st.dataframe(gas_out)
+                        gas_out = gas_out.copy()
+                        gas_out["Open TS"] = gas_out["Well"].apply(lambda w: f"?ts_well={quote(str(w))}&go_ts=1")
+                        st.dataframe(
+                            gas_out,
+                            use_container_width=True,
+                            column_config={
+                                "Open TS": st.column_config.LinkColumn(
+                                    label="Open Time Series",
+                                    help="Jump to Time Series Visualization with this well selected",
+                                    display_text="Open TS"
+                                )
+                            }
+                        )
                     else:
                         st.success("No gas wells crossed the threshold for the selected window.")
+
                 else:
                     st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
@@ -741,6 +799,11 @@ with tabs[3]:
                 if len(latest_per_well) and not pd.isna(latest_per_well.iloc[0]["Well"]):
                     default_well = latest_per_well.iloc[0]["Well"]
 
+        # If a well was passed via ?ts_well=... or set earlier, use it as default
+        ts_from_link = st.session_state.get("ts_well")
+        if ts_from_link and ts_from_link in wells_all:
+            default_well = ts_from_link
+
         # --- Well selector defaulting to Top-1 oil producer this month ---
         wells_ts = wells_all
         default_index = wells_ts.index(default_well) if default_well in wells_ts else 0
@@ -917,3 +980,4 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
