@@ -1,4 +1,6 @@
-# Adera Data Dashboard — resilient version (fixes KeyError)
+# Credit: 
+# Radya Evandhika Novaldi
+# Jr. Engineer Petroleum - Zona 4
 # --------------------------------------------------------------
 import re
 import streamlit as st
@@ -7,17 +9,21 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+import json, urllib.parse
+import streamlit.components.v1 as components
 from io import BytesIO
 from sklearn.ensemble import IsolationForest, RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+from urllib.parse import quote
 
 # =========================
 # Page config
 # =========================
 st.set_page_config(page_title='Adera Data Dashboard', layout='wide')
 st.title('Adera Data Dashboard')
+st.caption("Made for Kertas Kerja Wajib (KKW) fulfillment.")
 
 # =========================
 # Utilities
@@ -132,6 +138,61 @@ def rmse_score(y_true, y_pred):
         # Older sklearn fallback
         import numpy as np
         return np.sqrt(mean_squared_error(y_true, y_pred))
+        
+def _activate_tab(tab_label: str):
+    # Auto-click a Streamlit tab whose text matches tab_label.
+    components.html(f"""
+    <script>
+    const target = {json.dumps(tab_label)};
+    function clickIt() {{
+      const tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+      for (const t of tabs) {{
+        if (t.innerText.trim() === target) {{
+          t.click();
+          return;
+        }}
+      }}
+      // If tabs not yet in DOM, retry shortly
+      setTimeout(clickIt, 50);
+    }}
+    clickIt();
+    </script>
+    """, height=0)
+
+# If we came in with a jump request (?ts_well=...&go_ts=1), set the well and switch tabs
+def _get_params():
+    # Streamlit ≥ 1.30: st.query_params (property)
+    if hasattr(st, "query_params"):
+        qp = st.query_params
+        def _get1(key, default=None):
+            v = qp.get(key, default)
+            # normalize to single string
+            return v[0] if isinstance(v, list) and v else (v if v is not None else default)
+        return _get1("ts_well"), _get1("go_ts", "0"), qp
+    # Older Streamlit: experimental_* functions
+    else:
+        qp = st.experimental_get_query_params()
+        def _get1(key, default=None):
+            v = qp.get(key, [default])
+            return v[0] if isinstance(v, list) else v
+        return _get1("ts_well"), _get1("go_ts", "0"), qp
+
+_tsw, _go, _qp_obj = _get_params()
+
+if _tsw:
+    st.session_state["ts_well"] = _tsw  # preselect in the TS selectbox
+    if str(_go) == "1":
+        _activate_tab("Time Series Visualization")
+        # Clear the one-shot flag but keep ts_well
+        try:
+            if hasattr(st, "query_params"):
+                st.query_params["ts_well"] = _tsw
+                if "go_ts" in st.query_params:
+                    del st.query_params["go_ts"]
+            else:
+                st.experimental_set_query_params(ts_well=_tsw)
+        except Exception:
+            pass
 
 # =========================
 # Data load & prep
@@ -186,22 +247,46 @@ tabs = st.tabs([
 def have(*cols):
     return all(c in df.columns for c in cols)
 
-# ================= Statistics Tab =================
+# ==== DROP-IN REPLACEMENT: Statistics tab (auto-select latest month) ====
 with tabs[0]:
     st.header('Statistics')
 
     if not have("Well", "Date"):
         st.warning("Columns 'Well' and/or 'Date' are missing; cannot compute statistics.")
     else:
-        # Year / Month selection
-        st.subheader("Select Month and Year for Analysis")
-        avail_years = sorted(df['Year'].dropna().unique(), reverse=True)
-        selected_year_stat = st.selectbox("Select Year", avail_years if len(avail_years) else [np.nan], key="stat_year")
-        months_for_year = sorted(df[df['Year'] == selected_year_stat]['Month'].dropna().unique())
-        selected_month_stat = st.selectbox("Select Month", months_for_year if len(months_for_year) else [np.nan], key="stat_month")
+        # Determine latest available date in data (fallback to today if none)
+        latest_dt = pd.to_datetime(df['Date'], errors='coerce').max()
+        latest_year = int(latest_dt.year) if pd.notna(latest_dt) else int(pd.Timestamp.today().year)
+        latest_month = int(latest_dt.month) if pd.notna(latest_dt) else int(pd.Timestamp.today().month)
 
-        # Top-N selector
-        top_n = st.selectbox("Select number of top producers", [3, 5, 10, 20], index=3, key="stat_top_n")
+        # Year / Month selections default to latest available
+        st.subheader("Select Month and Year for Analysis")
+        avail_years_raw = sorted(df['Year'].dropna().unique(), reverse=True)
+        avail_years = [int(y) for y in avail_years_raw] if len(avail_years_raw) else []
+        year_index = 0 if (len(avail_years) and latest_year in avail_years) else 0
+        selected_year_stat = st.selectbox(
+            "Select Year",
+            avail_years if len(avail_years) else [np.nan],
+            index=year_index,
+            key="stat_year",
+        )
+
+        months_for_year_raw = sorted(df[df['Year'] == selected_year_stat]['Month'].dropna().unique())
+        months_for_year = [int(m) for m in months_for_year_raw] if len(months_for_year_raw) else []
+        if len(months_for_year):
+            if selected_year_stat == latest_year and latest_month in months_for_year:
+                month_index = months_for_year.index(latest_month)
+            else:
+                # default to latest month available within the selected year
+                month_index = len(months_for_year) - 1
+        else:
+            month_index = 0
+        selected_month_stat = st.selectbox(
+            "Select Month",
+            months_for_year if len(months_for_year) else [np.nan],
+            index=month_index if len(months_for_year) else 0,
+            key="stat_month",
+        )
 
         # Filter to month/year and take latest test per well
         stat_df = df.copy()
@@ -259,15 +344,13 @@ with tabs[0]:
             # --- Top Oil ---
             st.subheader("Top Oil Producers")
             if "Act. Nett (bopd)" in stat_df.columns:
-                top_oil = stat_df.sort_values("Act. Nett (bopd)", ascending=False).head(top_n)
-            
-                peak_oil_col = "Peak Oil (bopd)" if "Peak Oil (bopd)" in top_oil.columns else "Act. Nett (bopd)"
+                top_oil = stat_df.sort_values("Act. Nett (bopd)", ascending=False).head(20)
+                peak_oil_col = "Peak Oil (bopd)" if "Peak Oil (bopd)" in stat_df.columns else "Act. Nett (bopd)"
                 display_cols = safe_cols(
                     top_oil,
                     ["Well", "Structure", "Act. Nett (bopd)", peak_oil_col, "Well Lifespan"]
                 )
                 st.dataframe(top_oil[display_cols])
-            
                 oil_fig = px.bar(top_oil, x="Well", y="Act. Nett (bopd)", color="Structure" if "Structure" in top_oil.columns else None,
                                  title="Top Oil Producers")
                 safe_download_buttons_for_fig(oil_fig, "top_oil_producers", "stat_oil")
@@ -277,25 +360,22 @@ with tabs[0]:
             # --- Top Gas ---
             st.subheader("Top Gas Producers")
             if "Act. Gas Prod (MMscfd)" in stat_df.columns:
-                top_gas = stat_df.sort_values("Act. Gas Prod (MMscfd)", ascending=False).head(top_n)
-            
-                peak_gas_col = "Peak Gas (MMscfd)" if "Peak Gas (MMscfd)" in top_gas.columns else "Act. Gas Prod (MMscfd)"
+                top_gas = stat_df.sort_values("Act. Gas Prod (MMscfd)", ascending=False).head(20)
+                peak_gas_col = "Peak Gas (MMscfd)" if "Peak Gas (MMscfd)" in stat_df.columns else "Act. Gas Prod (MMscfd)"
                 display_cols = safe_cols(
                     top_gas,
                     ["Well", "Structure", "Act. Gas Prod (MMscfd)", peak_gas_col, "Well Lifespan"]
                 )
                 st.dataframe(top_gas[display_cols])
-            
                 gas_fig = px.bar(top_gas, x="Well", y="Act. Gas Prod (MMscfd)", color="Structure" if "Structure" in top_gas.columns else None,
                                  title="Top Gas Producers")
                 safe_download_buttons_for_fig(gas_fig, "top_gas_producers", "stat_gas")
             else:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
 
-# ================= Rate Change Alerts Tab =================
+# ================= Rate Change Alerts =================
 with tabs[1]:
     st.header("Rate Change Alerts")
-    st.caption("Filters by date range, then compares the latest two tests per well inside that range.")
 
     if not have("Well", "Date"):
         st.info("Need 'Well' and 'Date' columns.")
@@ -313,91 +393,198 @@ with tabs[1]:
             if start_date > end_date:
                 st.warning("Start date must be <= end date.")
             else:
-                wells = sorted(df['Well'].dropna().unique())
-                min_points = st.slider("Minimum data points per well (within selected date range)", 2, 10, 2)
-                pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
+                # --- Recover filter option ---
+                include_recover = st.checkbox(
+                    "Include wells with Lifting Method = 'Recover'",
+                    value=False,
+                    help=(
+                        "When unticked (default), any rows where Lifting Method == 'Recover' are ignored "
+                        "for both the in-window rows and their previous comparison rows."
+                    ),
+                )
 
-                # Helper
-                def pct_change(a, b):
-                    if pd.isna(a) or pd.isna(b) or b == 0:
-                        return np.nan
-                    return 100.0 * (a - b) / abs(b)
+                def filter_recover(data: pd.DataFrame) -> pd.DataFrame:
+                    if include_recover:
+                        return data
+                    if "Lifting Method" not in data.columns:
+                        return data
+                    lm = data["Lifting Method"].astype(str).str.strip().str.lower()
+                    return data[~lm.eq("recover")]
 
-                # Build mask once
-                date_mask = (df["Date"].dt.date >= start_date) & (df["Date"].dt.date <= end_date)
+                # --- Threshold options ---
+                st.subheader("Threshold Settings")
+                threshold_mode = st.radio(
+                    "Choose threshold type",
+                    ["Percent (%)", "Absolute"],
+                    index=0,
+                    horizontal=True,
+                )
 
-                alerts = []
-                for w in wells:
-                    d = df[(df['Well'] == w) & date_mask].sort_values('Date')
-                    if len(d) < min_points:
-                        continue
-
-                    # last 2 inside the selected range
-                    last = d.iloc[-1]
-                    prev = d.iloc[-2]
-
-                    # Grab values (may be NaN if columns don’t exist)
-                    last_oil = last.get("Act. Nett (bopd)")
-                    prev_oil = prev.get("Act. Nett (bopd)")
-                    last_gas = last.get("Act. Gas Prod (MMscfd)")
-                    prev_gas = prev.get("Act. Gas Prod (MMscfd)")
-                    last_choke = last.get("Choke")
-                    prev_choke = prev.get("Choke")
-
-                    oil_pct = pct_change(last_oil, prev_oil)
-                    gas_pct = pct_change(last_gas, prev_gas)
-                    choke_pct = pct_change(last_choke, prev_choke)  # shown for info
-
-                    # Use same flag logic as before (oil/gas only)
-                    flag = (not pd.isna(oil_pct) and abs(oil_pct) >= pct_threshold) or \
-                           (not pd.isna(gas_pct) and abs(gas_pct) >= pct_threshold)
-
-                    if flag:
-                        alerts.append({
-                            "Well": w,
-                            "Structure": last.get("Structure", np.nan),
-                            "Prev Date": prev.get("Date", np.nan),
-                            "Last Date": last.get("Date", np.nan),
-
-                            # --- Oil ---
-                            "Prev Oil (bopd)": prev_oil,
-                            "Last Oil (bopd)": last_oil,
-                            "Oil Δ%": oil_pct,
-
-                            # --- Gas ---
-                            "Prev Gas (MMscfd)": prev_gas,
-                            "Last Gas (MMscfd)": last_gas,
-                            "Gas Δ%": gas_pct,
-
-                            # --- Choke ---
-                            "Prev Choke": prev_choke,
-                            "Last Choke": last_choke,
-                            "Choke Δ%": choke_pct,
-
-                            # Contextual fields (optional)
-                            "Lifting Method": last.get("Lifting Method", np.nan),
-                            "Pump Eff (%)": last.get("Pump Eff (%)", np.nan),
-                        })
-
-                if alerts:
-                    alert_df = pd.DataFrame(alerts)
-
-                    # Sort by latest date if present
-                    if "Last Date" in alert_df.columns:
-                        alert_df = alert_df.sort_values("Last Date", ascending=False)
-
-                    st.dataframe(alert_df)
+                if threshold_mode == "Percent (%)":
+                    pct_threshold = st.slider("Percent change threshold (%)", 1, 100, 20)
+                    oil_abs_threshold = gas_abs_threshold = None
                 else:
-                    st.success("No wells crossed the threshold based on the latest two tests in the selected date range.")
+                    st.caption("Absolute thresholds use original units: bopd for oil, MMscfd for gas.")
+                    oil_abs_threshold = st.number_input(
+                        "Oil absolute change threshold (bopd)", value=10.0, min_value=0.0, step=10.0
+                    )
+                    gas_abs_threshold = st.number_input(
+                        "Gas absolute change threshold (MMscfd)", value=0.2, min_value=0.0, step=0.05
+                    )
+                    pct_threshold = None
 
+                # ----- Helpers (vectorized) -----
+                def pct_change_series(a: pd.Series, b: pd.Series) -> pd.Series:
+                    a = pd.to_numeric(a, errors='coerce')
+                    b = pd.to_numeric(b, errors='coerce')
+                    out = (a - b).divide(b.abs()) * 100.0
+                    out[(b == 0) | b.isna() | a.isna()] = np.nan
+                    return out
 
-# ================= Pareto Chart Tab =================
+                def abs_change_series(a: pd.Series, b: pd.Series) -> pd.Series:
+                    a = pd.to_numeric(a, errors='coerce')
+                    b = pd.to_numeric(b, errors='coerce')
+                    out = a - b
+                    out[a.isna() | b.isna()] = np.nan
+                    return out
+
+                def format_date_cols(df_in: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+                    out = df_in.copy()
+                    for c in cols:
+                        if c in out.columns:
+                            out[c] = pd.to_datetime(out[c], errors='coerce').dt.strftime('%Y-%m-%d')
+                    return out
+
+                # ---- Build working frame (Recover-filtered, sorted) ----
+                work = filter_recover(df.copy())
+                work = work.dropna(subset=["Well", "Date"]).sort_values(["Well", "Date"]).copy()
+
+                has_oil = "Act. Nett (bopd)" in work.columns
+                has_gas = "Act. Gas Prod (MMscfd)" in work.columns
+                has_choke = "Choke" in work.columns
+
+                # Previous row per well (overall, even if before window)
+                g = work.groupby("Well", group_keys=False)
+                work["Prev Date"] = g["Date"].shift(1)
+                if has_oil:
+                    work["Prev Oil (bopd)"] = g["Act. Nett (bopd)"].shift(1)
+                if has_gas:
+                    work["Prev Gas (MMscfd)"] = g["Act. Gas Prod (MMscfd)"].shift(1)
+                if has_choke:
+                    work["Prev Choke"] = g["Choke"].shift(1)
+
+                # Keep only rows inside window for comparison output
+                in_window = work[(work["Date"].dt.date >= start_date) & (work["Date"].dt.date <= end_date)].copy()
+                in_window = in_window.rename(columns={"Date": "Last Date"})
+
+                # Compute deltas
+                if has_oil:
+                    in_window["Last Oil (bopd)"] = in_window["Act. Nett (bopd)"]
+                    in_window["Oil Δ%"] = pct_change_series(in_window["Last Oil (bopd)"], in_window["Prev Oil (bopd)"])
+                    in_window["Oil Δ abs"] = abs_change_series(in_window["Last Oil (bopd)"], in_window["Prev Oil (bopd)"])
+                if has_gas:
+                    in_window["Last Gas (MMscfd)"] = in_window["Act. Gas Prod (MMscfd)"]
+                    in_window["Gas Δ%"] = pct_change_series(in_window["Last Gas (MMscfd)"], in_window["Prev Gas (MMscfd)"])
+                    in_window["Gas Δ abs"] = abs_change_series(in_window["Last Gas (MMscfd)"], in_window["Prev Gas (MMscfd)"])
+                if has_choke:
+                    in_window["Choke Δ%"] = pct_change_series(in_window["Choke"], in_window["Prev Choke"])  # info only
+
+                # ---- Oil table (stacked first) ----
+                if has_oil:
+                    oil_cols_base = [
+                        "Well", "Structure", "Prev Date", "Last Date",
+                        "Pot. Nett (bopd)", "Prev Oil (bopd)", "Last Oil (bopd)",
+                        "Oil Δ", "Δ Type",
+                        "Lifting Method", "Pump Eff (%)",
+                    ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
+
+                    oil_view = in_window.dropna(subset=["Prev Oil (bopd)"])  # need a previous point
+                    if threshold_mode == "Percent (%)":
+                        oil_view = oil_view[oil_view["Oil Δ%"].abs() >= pct_threshold]
+                        oil_view = oil_view.assign(**{"Oil Δ": oil_view["Oil Δ%"], "Δ Type": "%"})
+                    else:
+                        oil_view = oil_view[oil_view["Oil Δ abs"].abs() >= float(oil_abs_threshold)]
+                        oil_view = oil_view.assign(**{"Oil Δ": oil_view["Oil Δ abs"], "Δ Type": "abs (bopd)"})
+
+                    # Select & order columns safely
+                    oil_display = safe_cols(oil_view, oil_cols_base)
+                    oil_out = oil_view[oil_display].sort_values("Last Date", ascending=False)
+
+                    # Format dates as YYYY-MM-DD
+                    oil_out = format_date_cols(oil_out, ["Prev Date", "Last Date"]) 
+                    
+                    st.subheader("Oil Alerts")
+                    if len(oil_out):
+                        oil_out = oil_out.copy()
+                        oil_out["Open TS"] = oil_out["Well"].apply(lambda w: f"?ts_well={quote(str(w))}&go_ts=1")
+                        st.dataframe(
+                            oil_out,
+                            use_container_width=True,
+                            column_config={
+                                "Open TS": st.column_config.LinkColumn(
+                                    label="Open Time Series",
+                                    help="Jump to Time Series Visualization with this well selected",
+                                    display_text="Open TS"
+                                )
+                            }
+                        )
+                    else:
+                        st.success("No oil wells crossed the threshold for the selected window.")
+
+                else:
+                    st.info("Column 'Act. Nett (bopd)' not found.")
+
+                # ---- Gas table (stacked second) ----
+                if has_gas:
+                    gas_cols_base = [
+                        "Well", "Structure", "Prev Date", "Last Date",
+                        "Pot. Gas (MMscfd)", "Prev Gas (MMscfd)", "Last Gas (MMscfd)",
+                        "Gas Δ", "Δ Type",
+                        "Lifting Method", "Pump Eff (%)",
+                    ] + (["Prev Choke", "Choke", "Choke Δ%"] if has_choke else [])
+
+                    gas_view = in_window.dropna(subset=["Prev Gas (MMscfd)"])  # need a previous point
+                    if threshold_mode == "Percent (%)":
+                        gas_view = gas_view[gas_view["Gas Δ%"].abs() >= pct_threshold]
+                        gas_view = gas_view.assign(**{"Gas Δ": gas_view["Gas Δ%"], "Δ Type": "%"})
+                    else:
+                        gas_view = gas_view[gas_view["Gas Δ abs"].abs() >= float(gas_abs_threshold)]
+                        gas_view = gas_view.assign(**{"Gas Δ": gas_view["Gas Δ abs"], "Δ Type": "abs (MMscfd)"})
+
+                    gas_display = safe_cols(gas_view, gas_cols_base)  
+                    gas_out = gas_view[gas_display].sort_values("Last Date", ascending=False)
+
+                    # Format dates as YYYY-MM-DD
+                    gas_out = format_date_cols(gas_out, ["Prev Date", "Last Date"]) 
+                    
+                    st.subheader("Gas Alerts")
+                    if len(gas_out):
+                        gas_out = gas_out.copy()
+                        gas_out["Open TS"] = gas_out["Well"].apply(lambda w: f"?ts_well={quote(str(w))}&go_ts=1")
+                        st.dataframe(
+                            gas_out,
+                            use_container_width=True,
+                            column_config={
+                                "Open TS": st.column_config.LinkColumn(
+                                    label="Open Time Series",
+                                    help="Jump to Time Series Visualization with this well selected",
+                                    display_text="Open TS"
+                                )
+                            }
+                        )
+                    else:
+                        st.success("No gas wells crossed the threshold for the selected window.")
+
+                else:
+                    st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
+
+# ==== Pareto Chart Tab (auto-latest month; Down Time uses monthly total) ====
 with tabs[2]:
     st.header("Pareto Chart")
 
     # ---- Metric & Category (only show existing) ----
     metric = st.selectbox(
-        "Metric (absolute values are used for Pareto accumulation)",
+        "Metric Type",
         [m for m in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)", "Down Time"] if m in df.columns] or ["Act. Nett (bopd)"]
     )
     category = st.selectbox(
@@ -408,12 +595,31 @@ with tabs[2]:
     if not have("Date", "Well"):
         st.info("Need 'Date' and 'Well' columns.")
     else:
-        # ---- Month/Year selectors ----
-        avail_years = sorted(df['Year'].dropna().unique(), reverse=True)
-        sel_year = st.selectbox("Year", avail_years if len(avail_years) else [np.nan], key="pareto_year")
+        # ---- Auto-default to latest month/year available (same as Statistics) ----
+        latest_dt = pd.to_datetime(df["Date"], errors="coerce").max()
+        latest_year = int(latest_dt.year) if pd.notna(latest_dt) else int(pd.Timestamp.today().year)
+        latest_month = int(latest_dt.month) if pd.notna(latest_dt) else int(pd.Timestamp.today().month)
 
-        months_for_year = sorted(df[df['Year'] == sel_year]['Month'].dropna().unique()) if not pd.isna(sel_year) else []
-        sel_month = st.selectbox("Month", months_for_year if len(months_for_year) else [np.nan], key="pareto_month")
+        avail_years_raw = sorted(df["Year"].dropna().unique(), reverse=True)
+        avail_years = [int(y) for y in avail_years_raw] if len(avail_years_raw) else []
+        year_index = 0 if (len(avail_years) and latest_year in avail_years) else 0
+        sel_year = st.selectbox("Year", avail_years if len(avail_years) else [np.nan], index=year_index, key="pareto_year")
+
+        months_for_year_raw = sorted(df[df["Year"] == sel_year]["Month"].dropna().unique()) if not pd.isna(sel_year) else []
+        months_for_year = [int(m) for m in months_for_year_raw] if len(months_for_year_raw) else []
+        if len(months_for_year):
+            if sel_year == latest_year and latest_month in months_for_year:
+                month_index = months_for_year.index(latest_month)
+            else:
+                month_index = len(months_for_year) - 1
+        else:
+            month_index = 0
+        sel_month = st.selectbox(
+            "Month",
+            months_for_year if len(months_for_year) else [np.nan],
+            index=month_index if len(months_for_year) else 0,
+            key="pareto_month",
+        )
 
         # ---- Top N selector ----
         top_choice = st.selectbox("Show Top", ["All", 5, 10, 20], index=3)
@@ -428,135 +634,276 @@ with tabs[2]:
         if work.empty or metric not in work.columns or category not in work.columns:
             st.info("No data for the selected month/year (or selected columns missing).")
         else:
-            # ---- ALWAYS 'Latest per Well' within the month/year ----
-            base_cols = ["Well", "Date", "Structure", category, metric]
-            keep_cols = [c for c in base_cols if c in work.columns]
-            keep_cols = list(dict.fromkeys(keep_cols))  # de-dup names, preserve order
+            # Ensure Structure exists for stacking
+            if "Structure" not in work.columns:
+                work = work.copy()
+                work["Structure"] = "Unknown"
 
-            tmp = work[keep_cols].copy()
-            tmp = tmp.loc[:, ~tmp.columns.duplicated()].copy()  # extra safety
+            title_suffix = f"{int(sel_month)}/{int(sel_year)}" if len(months_for_year) else "All Data"
 
-            data_pareto = (
-                tmp.dropna(subset=["Well", "Date"])
-                   .sort_values("Date")
-                   .groupby("Well", as_index=False)
-                   .last()
-            )
+            if metric == "Down Time":
+                # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
+                # Tip: choose Category = 'Well' to see total downtime hours per well in the month.
+                p = work[[category, "Structure", metric]].dropna(subset=[category, metric]).copy()
+                p = p.rename(columns={category: "cat_key"})
+                p["abs_metric"] = p[metric].abs()
 
-            if "Structure" not in data_pareto.columns:
-                data_pareto["Structure"] = "Unknown"
+                totals = (
+                    p.groupby("cat_key", as_index=False)["abs_metric"]
+                     .sum()
+                     .rename(columns={"abs_metric": "cat_total"})
+                     .sort_values("cat_total", ascending=False)
+                )
+                grand_total = totals["cat_total"].sum()
 
-            # ---------- SAFE aggregation using a temp key ----------
-            # Build mini table and rename category -> 'cat_key' to avoid name collisions in groupby results
-            cols_needed = [category, "Structure", metric]
-            cols_needed = [c for c in list(dict.fromkeys(cols_needed)) if c in data_pareto.columns]
-            p = data_pareto[cols_needed].copy()
-            p = p.loc[:, ~p.columns.duplicated()].copy()
-
-            if category not in p.columns or metric not in p.columns:
-                st.info("Required columns not available after filtering.")
-            else:
-                p = p.dropna(subset=[category, metric])
-                if p.empty:
-                    st.info("No rows to aggregate after filtering.")
+                if grand_total == 0:
+                    st.info("Total is zero after filtering; nothing to plot.")
                 else:
-                    p["abs_metric"] = p[metric].abs()
-                    p = p.rename(columns={category: "cat_key"})  # <--- key step
+                    # Top N filter
+                    if top_choice != "All":
+                        top_n = int(top_choice)
+                        top_cats = totals["cat_key"].head(top_n).tolist()
+                        totals = totals[totals["cat_key"].isin(top_cats)]
+                    cat_order = totals["cat_key"].tolist()
 
-                    # Totals per category (for ordering & cumulative %)
-                    totals = (
-                        p[["cat_key", "abs_metric"]]
-                        .groupby("cat_key", as_index=False)
-                        .sum()
-                        .rename(columns={"abs_metric": "cat_total"})
-                        .sort_values("cat_total", ascending=False)
+                    by_cat_struct = (
+                        p[p["cat_key"].isin(cat_order)]
+                         .groupby(["cat_key", "Structure"], as_index=False)["abs_metric"]
+                         .sum()
                     )
 
-                    grand_total = totals["cat_total"].sum()
-                    if grand_total == 0:
-                        st.info("Total is zero after filtering; nothing to plot.")
+                    totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
+                    totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
+
+                    fig = go.Figure()
+                    for s in sorted(by_cat_struct["Structure"].dropna().unique().tolist()):
+                        sub = by_cat_struct[by_cat_struct["Structure"] == s]
+                        y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                        fig.add_bar(x=cat_order, y=y_vals, name=str(s))
+
+                    fig.add_scatter(
+                        x=cat_order,
+                        y=totals_ordered["cumperc"],
+                        name="Cumulative %",
+                        yaxis="y2",
+                        mode="lines+markers",
+                    )
+
+                    fig.update_layout(
+                        title=f"Pareto of {metric} by {category} — Monthly Total {title_suffix}",
+                        xaxis_title=category,
+                        yaxis_title=f"{metric} (hours)",
+                        barmode="stack",
+                        yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
+                    safe_download_buttons_for_fig(fig, "pareto_chart_down_time", "pareto_dt")
+
+            else:
+                # --- Original logic: 'Latest per Well' within the month/year ---
+                base_cols = ["Well", "Date", "Structure", category, metric]
+                keep_cols = [c for c in base_cols if c in work.columns]
+                keep_cols = list(dict.fromkeys(keep_cols))  # de-dup names, preserve order
+
+                tmp = work[keep_cols].copy()
+                tmp = tmp.loc[:, ~tmp.columns.duplicated()].copy()
+
+                data_pareto = (
+                    tmp.dropna(subset=["Well", "Date"])
+                       .sort_values("Date")
+                       .groupby("Well", as_index=False)
+                       .last()
+                )
+
+                cols_needed = [category, "Structure", metric]
+                cols_needed = [c for c in list(dict.fromkeys(cols_needed)) if c in data_pareto.columns]
+                p = data_pareto[cols_needed].copy()
+                p = p.loc[:, ~p.columns.duplicated()].copy()
+
+                if category not in p.columns or metric not in p.columns:
+                    st.info("Required columns not available after filtering.")
+                else:
+                    p = p.dropna(subset=[category, metric])
+                    if p.empty:
+                        st.info("No rows to aggregate after filtering.")
                     else:
-                        # Top N categories by total
-                        if top_choice != "All":
-                            top_n = int(top_choice)
-                            top_cats = totals["cat_key"].head(top_n).tolist()
-                            totals = totals[totals["cat_key"].isin(top_cats)]
+                        p["abs_metric"] = p[metric].abs()
+                        p = p.rename(columns={category: "cat_key"})
+
+                        totals = (
+                            p[["cat_key", "abs_metric"]]
+                             .groupby("cat_key", as_index=False)
+                             .sum()
+                             .rename(columns={"abs_metric": "cat_total"})
+                             .sort_values("cat_total", ascending=False)
+                        )
+
+                        grand_total = totals["cat_total"].sum()
+                        if grand_total == 0:
+                            st.info("Total is zero after filtering; nothing to plot.")
                         else:
-                            top_cats = totals["cat_key"].tolist()
+                            if top_choice != "All":
+                                top_n = int(top_choice)
+                                top_cats = totals["cat_key"].head(top_n).tolist()
+                                totals = totals[totals["cat_key"].isin(top_cats)]
+                            cat_order = totals["cat_key"].tolist()
 
-                        # Order categories
-                        cat_order = totals["cat_key"].tolist()
+                            by_cat_struct = (
+                                p[p["cat_key"].isin(cat_order)]
+                                 .groupby(["cat_key", "Structure"], as_index=False)["abs_metric"]
+                                 .sum()
+                            )
 
-                        # Per-(category, structure) contributions for stacked bars
-                        if "Structure" not in p.columns:
-                            p["Structure"] = "Unknown"
+                            totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
+                            totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
 
-                        by_cat_struct = (
-                            p[p["cat_key"].isin(cat_order)]
-                            .groupby(["cat_key", "Structure"], as_index=False)["abs_metric"]
-                            .sum()
-                        )
+                            fig = go.Figure()
+                            for s in sorted(by_cat_struct["Structure"].dropna().unique().tolist()):
+                                sub = by_cat_struct[by_cat_struct["Structure"] == s]
+                                y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
+                                fig.add_bar(x=cat_order, y=y_vals, name=str(s))
 
-                        # Cumulative % over ordered categories
-                        totals_ordered = totals.set_index("cat_key").loc[cat_order].reset_index()
-                        totals_ordered["cumperc"] = 100 * totals_ordered["cat_total"].cumsum() / grand_total
+                            fig.add_scatter(
+                                x=cat_order,
+                                y=totals_ordered["cumperc"],
+                                name="Cumulative %",
+                                yaxis="y2",
+                                mode="lines+markers",
+                            )
 
-                        # ---- Plot: stacked bars by Structure, cumulative % line by category ----
-                        fig = go.Figure()
-
-                        structures = sorted(by_cat_struct["Structure"].dropna().unique().tolist())
-                        for s in structures:
-                            sub = by_cat_struct[by_cat_struct["Structure"] == s]
-                            y_vals = [float(sub.loc[sub["cat_key"] == c, "abs_metric"].sum()) for c in cat_order]
-                            fig.add_bar(x=cat_order, y=y_vals, name=str(s))
-
-                        fig.add_scatter(
-                            x=cat_order,
-                            y=totals_ordered["cumperc"],
-                            name="Cumulative %",
-                            yaxis="y2",
-                            mode="lines+markers"
-                        )
-
-                        title_suffix = f"{int(sel_month)}/{int(sel_year)}" if not (np.isnan(sel_year) or len(months_for_year) == 0) else "All Data"
-                        # Pretty x-axis labels: show the *original* category name
-                        fig.update_layout(
-                            title=f"Pareto of {metric} by {category} — {title_suffix}",
-                            xaxis_title=category,
-                            yaxis_title=f"{metric} (|value|)",
-                            barmode="stack",
-                            yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                        )
-                        # Replace x tick labels from cat_key to original category values
-                        fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
-
-                        safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
+                            fig.update_layout(
+                                title=f"Pareto of {metric} by {category} — {title_suffix}",
+                                xaxis_title=category,
+                                yaxis_title=f"{metric} (|value|)",
+                                barmode="stack",
+                                yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                            )
+                            fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
+                            safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
                         
-# ================= Time Series Visualization Tab =================
+# ================= Time Series Visualization Tab (dual y-axis + default = monthly top oil producer) =================
 with tabs[3]:
     st.header("Time Series Visualization")
 
     if not have("Well", "Date"):
         st.info("Need 'Well' and 'Date' columns.")
     else:
-        wells_ts = sorted(df['Well'].dropna().unique())
-        well_sel = st.selectbox("Select Well", wells_ts if len(wells_ts) else ["(none)"])
+        # --- Figure out the "current month" from Statistics tab (auto-latest as fallback) ---
+        latest_dt = pd.to_datetime(df["Date"], errors="coerce").max()
+        fallback_year  = int(latest_dt.year) if pd.notna(latest_dt) else int(pd.Timestamp.today().year)
+        fallback_month = int(latest_dt.month) if pd.notna(latest_dt) else int(pd.Timestamp.today().month)
 
-        series_options = [c for c in [
-            "Act. Nett (bopd)", "Act. Gross (bfpd)", "Act. Gas Prod (MMscfd)",
-            "Pot. Nett (bopd)", "Pot. Gross (bfpd)",
-            "Pcsg", "Ptbg", "Pfl", "Psep", "Pump Eff (%)", "Choke"
-        ] if c in df.columns]
-        y_cols = st.multiselect("Select series to plot", series_options, default=[s for s in ["Act. Nett (bopd)", "Act. Gas Prod (MMscfd)"] if s in series_options])
+        sel_year  = st.session_state.get("stat_year",  fallback_year)
+        sel_month = st.session_state.get("stat_month", fallback_month)
+
+        # If stats widgets weren’t created (edge cases), still guard types
+        try:
+            sel_year = int(sel_year)
+        except Exception:
+            sel_year = fallback_year
+        try:
+            sel_month = int(sel_month)
+        except Exception:
+            sel_month = fallback_month
+
+        # --- Compute Top-1 oil producer of that month (same logic as Statistics: latest-per-well, then sort by Act. Nett) ---
+        wells_all = sorted(df["Well"].dropna().unique())
+        default_well = wells_all[0] if len(wells_all) else "(none)"
+
+        if "Act. Nett (bopd)" in df.columns and len(wells_all):
+            month_df = df[(df["Year"] == sel_year) & (df["Month"] == sel_month)].copy()
+            if len(month_df):
+                latest_per_well = (
+                    month_df.dropna(subset=["Well", "Date"])
+                            .sort_values("Date")
+                            .groupby("Well", as_index=False)
+                            .last()
+                )
+                latest_per_well = latest_per_well.sort_values("Act. Nett (bopd)", ascending=False)
+                if len(latest_per_well) and not pd.isna(latest_per_well.iloc[0]["Well"]):
+                    default_well = latest_per_well.iloc[0]["Well"]
+
+        # If a well was passed via ?ts_well=... or set earlier, use it as default
+        ts_from_link = st.session_state.get("ts_well")
+        if ts_from_link and ts_from_link in wells_all:
+            default_well = ts_from_link
+
+        # --- Well selector defaulting to Top-1 oil producer this month ---
+        wells_ts = wells_all
+        default_index = wells_ts.index(default_well) if default_well in wells_ts else 0
+        well_sel = st.selectbox("Select Well", wells_ts if len(wells_ts) else ["(none)"], index=default_index, key="ts_well")
 
         d = df[df['Well'] == well_sel].sort_values("Date")
-        if len(d) and len(y_cols):
-            fig = go.Figure()
-            for c in y_cols:
-                fig.add_trace(go.Scatter(x=d["Date"], y=d[c], mode="lines+markers", name=c))
-            fig.update_layout(title=f"Time Series — {well_sel}", xaxis_title="Date", yaxis_title="Value")
-            safe_download_buttons_for_fig(fig, f"time_series_{well_sel}", "ts")
+        if len(d):
+            from plotly.subplots import make_subplots
+
+            # Default series (support both bopd & bfpd for Gross)
+            col_oil = "Act. Nett (bopd)" if "Act. Nett (bopd)" in d.columns else None
+            col_liq = ("Act. Gross (bopd)" if "Act. Gross (bopd)" in d.columns
+                       else ("Act. Gross (bfpd)" if "Act. Gross (bfpd)" in d.columns else None))
+            col_gas = "Act. Gas Prod (MMscfd)" if "Act. Gas Prod (MMscfd)" in d.columns else None
+
+            if not any([col_oil, col_liq, col_gas]):
+                st.info("None of the default series are available for this dataset.")
+            else:
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                # Liquid (LEFT axis)
+                if col_liq:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d["Date"], y=d[col_liq], name=col_liq,
+                            mode="lines+markers", line=dict(color="#1f77b4")
+                        ),
+                        secondary_y=False
+                    )
+                if col_oil:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d["Date"], y=d[col_oil], name=col_oil,
+                            mode="lines+markers", line=dict(color="#2ca02c")
+                        ),
+                        secondary_y=False
+                    )
+
+                # Gas (RIGHT axis)
+                if col_gas:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=d["Date"], y=d[col_gas], name=col_gas,
+                            mode="lines+markers", line=dict(color="#d62728")
+                        ),
+                        secondary_y=True
+                    )
+
+                # --- Force y-axes to start at 0 (compute sensible maxima) ---
+                def _safe_axis_max(series_list):
+                    try:
+                        vals = pd.concat(
+                            [pd.to_numeric(s, errors="coerce") for s in series_list if s is not None],
+                            axis=0
+                        )
+                        m = float(np.nanmax(vals)) if len(vals) else 0.0
+                    except Exception:
+                        m = 0.0
+                    # fallback to 1 to avoid [0,0] ranges; add headroom
+                    return 1.0 if (not np.isfinite(m) or m <= 0) else m * 1.1
+
+                left_max  = _safe_axis_max([d[col_liq] if col_liq else None,
+                                            d[col_oil] if col_oil else None])
+                right_max = _safe_axis_max([d[col_gas] if col_gas else None])
+
+                fig.update_layout(
+                    title=f"Liquid vs Gas — {well_sel}",
+                    xaxis_title="Date",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                fig.update_yaxes(title_text="Liquid rate (bopd/bfpd)", secondary_y=False, range=[0, left_max])
+                fig.update_yaxes(title_text="Gas rate (MMscfd)",      secondary_y=True,  range=[0, right_max])
+
+                safe_download_buttons_for_fig(fig, f"time_series_{well_sel}", "ts_dual")
 
 # ================= Anomaly Detection Tab =================
 with tabs[4]:
@@ -676,8 +1023,3 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
-
-
-
-
-
