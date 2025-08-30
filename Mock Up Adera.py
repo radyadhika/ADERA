@@ -790,7 +790,7 @@ with tabs[3]:
                     )
 
                 fig.update_layout(
-                    title=f"Liquid vs Gas — {well_sel} ({sel_month}/{sel_year})",
+                    title=f"Liquid vs Gas — {well_sel}",
                     xaxis_title="Date",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
@@ -917,6 +917,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
