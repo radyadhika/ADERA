@@ -791,7 +791,7 @@ with tabs[2]:
                             fig.update_layout(
                                 title=f"Pareto of {metric} by {category} — {title_suffix}",
                                 xaxis_title=category,
-                                yaxis_title=f"{metric} (|value|)",
+                                yaxis_title=f"{metric}",
                                 barmode="stack",
                                 yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 100]),
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -1205,4 +1205,5 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
