@@ -848,8 +848,14 @@ with tabs[3]:
 
         # --- Well selector defaulting to Top-1 oil producer this month ---
         wells_ts = wells_all
-        default_index = wells_ts.index(default_well) if default_well in wells_ts else 0
-        well_sel = st.selectbox("Select Well", wells_ts if len(wells_ts) else ["(none)"], index=default_index, key="ts_well")
+        if "ts_well" not in st.session_state:
+            st.session_state["ts_well"] = default_well
+        
+        well_sel = st.selectbox(
+            "Select Well",
+            wells_ts if len(wells_ts) else ["(none)"],
+            key="ts_well"
+        )
 
         d = df[df['Well'] == well_sel].sort_values("Date")
         if len(d):
@@ -1205,5 +1211,6 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
