@@ -395,7 +395,7 @@ with tabs[1]:
             else:
                 # --- Recover filter option ---
                 include_recover = st.checkbox(
-                    "Include wells with Lifting Method = 'Recover'",
+                    "Include wells with Lifting Method = 'Recover' & 'Dropout'",
                     value=False,
                     help=(
                         "When unticked (default), any rows where Lifting Method == 'Recover' are ignored "
@@ -409,7 +409,7 @@ with tabs[1]:
                     if "Lifting Method" not in data.columns:
                         return data
                     lm = data["Lifting Method"].astype(str).str.strip().str.lower()
-                    return data[~lm.eq("recover")]
+                    return data[~lm.isin(["recover", "dropout"])]
 
                 # --- Threshold options ---
                 st.subheader("Threshold Settings")
@@ -1211,6 +1211,7 @@ with tabs[5]:
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
+
 
 
 
