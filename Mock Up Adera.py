@@ -19,6 +19,12 @@ from sklearn.metrics import mean_squared_error, r2_score
 from urllib.parse import quote
 
 # =========================
+# Config flags to reduce resource usage
+# =========================
+# Set this to True if your server has enough RAM/CPU and you really need PNG export.
+EXPORT_PNG = False
+
+# =========================
 # Page config
 # =========================
 st.set_page_config(page_title='Adera Data Dashboard', layout='wide')
@@ -91,21 +97,25 @@ def coerce_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 def safe_download_buttons_for_fig(fig: go.Figure, base_filename: str, key_prefix: str):
     st.plotly_chart(fig, use_container_width=True)
-    # Try PNG via kaleido
-    png_buffer = None
-    try:
-        png_bytes = pio.to_image(fig, format="png", scale=2)
-        png_buffer = BytesIO(png_bytes)
-    except Exception:
+
+    # PNG export can be heavy; guard with flag
+    if EXPORT_PNG:
         png_buffer = None
-    if png_buffer is not None:
-        st.download_button(
-            label="Download as PNG",
-            data=png_buffer,
-            file_name=f"{base_filename}.png",
-            mime="image/png",
-            key=f"{key_prefix}_png"
-        )
+        try:
+            png_bytes = pio.to_image(fig, format="png", scale=2)
+            png_buffer = BytesIO(png_bytes)
+        except Exception:
+            png_buffer = None
+        if png_buffer is not None:
+            st.download_button(
+                label="Download as PNG",
+                data=png_buffer,
+                file_name=f"{base_filename}.png",
+                mime="image/png",
+                key=f"{key_prefix}_png"
+            )
+
+    # HTML is much lighter
     html_bytes = fig.to_html(full_html=False).encode("utf-8")
     st.download_button(
         label="Download as HTML",
@@ -247,12 +257,12 @@ tabs = st.tabs([
 def have(*cols):
     return all(c in df.columns for c in cols)
 
-# ==== DROP-IN REPLACEMENT: Statistics tab (auto-select latest month) ====
+# ==== Statistics tab (auto-select latest month) ====
 with tabs[0]:
     st.header('Statistics')
 
     if not have("Well", "Date"):
-        st.warning("Columns 'Well' and/or 'Date' are missing; cannot compute statistics.")
+        st.warning("Columns 'Well' and 'Date' are missing; cannot compute statistics.")
     else:
         # Determine latest available date in data (fallback to today if none)
         latest_dt = pd.to_datetime(df['Date'], errors='coerce').max()
@@ -351,8 +361,13 @@ with tabs[0]:
                     ["Well", "Structure", "Act. Nett (bopd)", peak_oil_col, "Well Lifespan"]
                 )
                 st.dataframe(top_oil[display_cols])
-                oil_fig = px.bar(top_oil, x="Well", y="Act. Nett (bopd)", color="Structure" if "Structure" in top_oil.columns else None,
-                                 title="Top Oil Producers")
+                oil_fig = px.bar(
+                    top_oil,
+                    x="Well",
+                    y="Act. Nett (bopd)",
+                    color="Structure" if "Structure" in top_oil.columns else None,
+                    title="Top Oil Producers"
+                )
                 safe_download_buttons_for_fig(oil_fig, "top_oil_producers", "stat_oil")
             else:
                 st.info("Column 'Act. Nett (bopd)' not found.")
@@ -367,8 +382,13 @@ with tabs[0]:
                     ["Well", "Structure", "Act. Gas Prod (MMscfd)", peak_gas_col, "Well Lifespan"]
                 )
                 st.dataframe(top_gas[display_cols])
-                gas_fig = px.bar(top_gas, x="Well", y="Act. Gas Prod (MMscfd)", color="Structure" if "Structure" in top_gas.columns else None,
-                                 title="Top Gas Producers")
+                gas_fig = px.bar(
+                    top_gas,
+                    x="Well",
+                    y="Act. Gas Prod (MMscfd)",
+                    color="Structure" if "Structure" in top_gas.columns else None,
+                    title="Top Gas Producers"
+                )
                 safe_download_buttons_for_fig(gas_fig, "top_gas_producers", "stat_gas")
             else:
                 st.info("Column 'Act. Gas Prod (MMscfd)' not found.")
@@ -398,8 +418,8 @@ with tabs[1]:
                     "Include wells with Lifting Method = 'Recover' & 'Dropout'",
                     value=False,
                     help=(
-                        "When unticked (default), any rows where Lifting Method == 'Recover' are ignored "
-                        "for both the in-window rows and their previous comparison rows."
+                        "When unticked (default), any rows where Lifting Method == 'Recover' or 'Dropout' "
+                        "are ignored for both the in-window rows and their previous comparison rows."
                     ),
                 )
 
@@ -643,7 +663,7 @@ with tabs[2]:
 
             if metric == "Down Time":
                  # --- Monthly TOTAL hours per category (no 'latest per well' collapse) ---
-                # Tip: choose Category = 'Well' to see total downtime hours per well in the month.
+                 # Tip: choose Category = 'Well' to see total downtime hours per well in the month.
                 
                 # If the chosen category is "Structure", don't stack by Structure again.
                 stack_col = "Structure" if (category != "Structure" and "Structure" in work.columns) else None
@@ -799,7 +819,7 @@ with tabs[2]:
                             fig.update_xaxes(tickmode="array", tickvals=cat_order, ticktext=cat_order)
                             safe_download_buttons_for_fig(fig, "pareto_chart", "pareto")
                                         
-# ================= Time Series Visualization Tab (dual y-axis + default = monthly top oil producer) =================
+# ================= Time Series Visualization Tab =================
 with tabs[3]:
     st.header("Time Series Visualization")
 
@@ -824,7 +844,7 @@ with tabs[3]:
         except Exception:
             sel_month = fallback_month
 
-        # --- Compute Top-1 oil producer of that month (same logic as Statistics: latest-per-well, then sort by Act. Nett) ---
+        # --- Compute Top-1 oil producer of that month ---
         wells_all = sorted(df["Well"].dropna().unique())
         default_well = wells_all[0] if len(wells_all) else "(none)"
 
@@ -937,15 +957,19 @@ with tabs[4]:
     scope = st.radio("Scope", ["Per Well", "All Wells Combined"], index=0, horizontal=True)
 
     explain = st.checkbox("Show explanations (top drivers, deltas vs previous)", value=True)
-    max_k = max(1, len(features))
+    max_k = max(1, len(features)) if features else 1
     topk = st.number_input("Top features to list", min_value=1, max_value=max_k, value=min(3, max_k), step=1)
     show_heatmap = st.checkbox("Show z-score heatmap (anomalies × features)", value=False)
+
+    # New: trigger heavy work only on button click
+    run_anomaly = st.button("Run anomaly detection", type="primary")
 
     def run_iforest(data: pd.DataFrame, feat: list[str], cont: float):
         X = data[feat].dropna()
         if len(X) < 10:
             return None, None, None, None
-        model = IsolationForest(n_estimators=300, contamination=cont, random_state=42)
+        # Lighter model to reduce CPU/RAM
+        model = IsolationForest(n_estimators=100, contamination=cont, random_state=42)
         labels = model.fit_predict(X)                 # -1 = anomaly, 1 = normal
         decfun = model.decision_function(X)           # more negative => more anomalous
         return X.index, labels, decfun, model
@@ -975,190 +999,214 @@ with tabs[4]:
         prev.columns = [f"Prev {c}" for c in prev.columns]
         return prev
 
-    if not features:
-        st.info("Select at least one feature.")
+    if not run_anomaly:
+        st.info("Set parameters, then click **Run anomaly detection** to execute the model.")
     else:
-        base_cols = [c for c in ["Date", "Well", "Structure"] if c in df.columns]
-
-        if scope == "Per Well" and "Well" in df.columns:
-            rows = []
-            heatmaps = []  # collect (title, z_df) for optional heatmap
-
-            for w in sorted(df["Well"].dropna().unique()):
-                d = df[df["Well"] == w].copy()
-                feat = [c for c in features if c in d.columns]
-                idx, labels, decfun, model = run_iforest(d, feat, contamination)
-                if idx is None:
-                    continue
-
-                # anomaly row indexes (original dataframe index)
-                anom_mask_pos = np.where(labels == -1)[0]
-                if len(anom_mask_pos) == 0:
-                    continue
-                anom_idx = idx[anom_mask_pos]
-
-                # Current anomaly block
-                curr = d.loc[anom_idx, base_cols + feat].copy()
-
-                # Robust z-scores vs this well's historical distribution
-                z = robust_z(curr_df=curr, baseline_df=d, feat=feat)
-                abs_z = z.abs()
-
-                # Top-1 driver & top-k list
-                top1_feat = abs_z.idxmax(axis=1)
-                top1_val = abs_z.max(axis=1)
-
-                topk_list = abs_z.apply(lambda r: list(r.nlargest(int(topk)).items()), axis=1)
-                for k in range(1, int(topk) + 1):
-                    curr[f"Top{k}"] = topk_list.apply(
-                        lambda lst, k=k: (f"{lst[k-1][0]} (|z|={lst[k-1][1]:.2f})" if len(lst) >= k else "")
-                    )
-
-                # Previous values (to compute deltas for the row's top1 feature)
-                d_sorted = d.sort_values("Date") if "Date" in d.columns else d.copy()
-                prev_all = add_prev_values(d_sorted, feat).reindex(d_sorted.index)
-                # Align prev rows to anomaly indices
-                prev_for_anom = prev_all.reindex(anom_idx)
-
-                # Extract prev/current for the row-specific top feature
-                def _extract_top_vals(row):
-                    f = row["Top1_feat"]
-                    curr_v = row.get(f, np.nan)
-                    prev_v = prev_for_anom.loc[row.name, f"Prev {f}"] if f"Prev {f}" in prev_for_anom.columns else np.nan
-                    dv = curr_v - prev_v if pd.notna(curr_v) and pd.notna(prev_v) else np.nan
-                    dp = (dv / prev_v * 100.0) if pd.notna(dv) and pd.notna(prev_v) and prev_v != 0 else np.nan
-                    return pd.Series({"Value": curr_v, "Prev Value": prev_v, "Δ abs": dv, "Δ %": dp})
-
-                curr["Top1_feat"] = top1_feat
-                curr["|z| (Top1)"] = top1_val.round(2)
-
-                # Attach IF decision score
-                dec_series = pd.Series(decfun, index=idx)
-                curr["IF score (more − = more anomalous)"] = dec_series.reindex(anom_idx).round(4)
-
-                # Pull per-row values/deltas for Top1 feature
-                val_blocks = curr.apply(_extract_top_vals, axis=1)
-                curr = pd.concat([curr, val_blocks], axis=1)
-
-                # Keep tidy columns
-                keep = base_cols + ["IF score (more − = more anomalous)",
-                                    "Top1_feat", "|z| (Top1)", "Value", "Prev Value", "Δ abs", "Δ %"] + \
-                       [f"Top{k}" for k in range(1, int(topk) + 1)]
-                curr = curr[keep]
-
-                rows.append(curr)
-
-                if show_heatmap:
-                    # Keep a small z-score matrix for this well's anomalies
-                    z_disp = z.copy()
-                    # Label rows with date (if any) for readability
-                    if "Date" in curr.columns:
-                        ridx = curr["Date"].dt.strftime("%Y-%m-%d").fillna("").astype(str)
-                        z_disp.index = [f"{w} | {r}" for r in ridx]
-                    else:
-                        z_disp.index = [f"{w} | {i}" for i in range(len(z_disp))]
-                    heatmaps.append((w, z_disp))
-
-            if rows:
-                res = pd.concat(rows).sort_values([c for c in ["Well", "Date"] if c in base_cols])
-                st.subheader("Anomaly table with drivers")
-                st.dataframe(res, use_container_width=True)
-            else:
-                st.success("No anomalies detected with current settings.")
-
-            if show_heatmap and heatmaps:
-                st.subheader("Feature z-score heatmap (higher |z| ⇒ stronger driver)")
-                for w, zmat in heatmaps:
-                    fig_hm = go.Figure(data=go.Heatmap(
-                        z=zmat.values,
-                        x=zmat.columns.tolist(),
-                        y=zmat.index.tolist(),
-                        zmid=0,
-                        colorbar=dict(title="z-score")
-                    ))
-                    fig_hm.update_layout(
-                        title=f"Well {w} — anomaly feature z-scores",
-                        xaxis_title="Feature",
-                        yaxis_title="Anomaly (row)"
-                    )
-                    st.plotly_chart(fig_hm, use_container_width=True)
-
+        if not features:
+            st.info("Select at least one feature.")
         else:
-            # All wells combined: single model + global baseline
-            d = df.copy()
-            feat = [c for c in features if c in d.columns]
-            idx, labels, decfun, model = run_iforest(d, feat, contamination)
-            if idx is None:
-                st.info("Not enough data for anomaly detection.")
-            else:
-                anom_pos = np.where(labels == -1)[0]
-                if len(anom_pos) == 0:
-                    st.success("No anomalies detected with current settings.")
-                else:
-                    anom_idx = idx[anom_pos]
+            base_cols = [c for c in ["Date", "Well", "Structure"] if c in df.columns]
+
+            if scope == "Per Well" and "Well" in df.columns:
+                rows = []
+                heatmaps = []  # collect (title, z_df) for optional heatmap
+
+                for w in sorted(df["Well"].dropna().unique()):
+                    d = df[df["Well"] == w].copy()
+                    feat = [c for c in features if c in d.columns]
+                    if not feat:
+                        continue
+                    idx, labels, decfun, model = run_iforest(d, feat, contamination)
+                    if idx is None:
+                        continue
+
+                    # anomaly row indexes (original dataframe index)
+                    anom_mask_pos = np.where(labels == -1)[0]
+                    if len(anom_mask_pos) == 0:
+                        continue
+                    anom_idx = idx[anom_mask_pos]
+
+                    # Current anomaly block
                     curr = d.loc[anom_idx, base_cols + feat].copy()
 
-                    # Robust z vs GLOBAL baseline
+                    # Robust z-scores vs this well's historical distribution
                     z = robust_z(curr_df=curr, baseline_df=d, feat=feat)
                     abs_z = z.abs()
+
+                    # Top-1 driver & top-k list
                     top1_feat = abs_z.idxmax(axis=1)
                     top1_val = abs_z.max(axis=1)
 
-                    topk_list = abs_z.apply(lambda r: list(r.nlargest(int(topk)).items()), axis=1)
-                    for k in range(1, int(topk) + 1):
-                        curr[f"Top{k}"] = topk_list.apply(
-                            lambda lst, k=k: (f"{lst[k-1][0]} (|z|={lst[k-1][1]:.2f})" if len(lst) >= k else "")
-                        )
+                    topk_list = abs_z.apply(lambda r: list(r.nlargest(int(topk)).items()), axis=1) if explain else None
+                    if explain:
+                        for k in range(1, int(topk) + 1):
+                            curr[f"Top{k}"] = topk_list.apply(
+                                lambda lst, k=k: (f"{lst[k-1][0]} (|z|={lst[k-1][1]:.2f})" if len(lst) >= k else "")
+                            )
 
-                    # Previous values by (Well, Date) if present, else simple shift
-                    if "Well" in d.columns and "Date" in d.columns:
-                        d_sorted = d.sort_values(["Well", "Date"]).copy()
-                        prev_all = d_sorted.groupby("Well")[feat].shift(1)
-                        prev_all.index = d_sorted.index
-                        prev_for_anom = prev_all.reindex(anom_idx)
-                    else:
-                        prev_for_anom = d[feat].shift(1).reindex(anom_idx)
+                    # Previous values (to compute deltas for the row's top1 feature)
+                    d_sorted = d.sort_values("Date") if "Date" in d.columns else d.copy()
+                    prev_all = add_prev_values(d_sorted, feat).reindex(d_sorted.index)
+                    # Align prev rows to anomaly indices
+                    prev_for_anom = prev_all.reindex(anom_idx)
 
-                    curr["Top1_feat"] = top1_feat
-                    curr["|z| (Top1)"] = top1_val.round(2)
-                    dec_series = pd.Series(decfun, index=idx)
-                    curr["IF score (more − = more anomalous)"] = dec_series.reindex(anom_idx).round(4)
-
+                    # Extract prev/current for the row-specific top feature
                     def _extract_top_vals(row):
                         f = row["Top1_feat"]
                         curr_v = row.get(f, np.nan)
-                        prev_v = prev_for_anom.loc[row.name, f] if f in prev_for_anom.columns else np.nan
+                        prev_v = prev_for_anom.loc[row.name, f"Prev {f}"] if f"Prev {f}" in prev_for_anom.columns else np.nan
                         dv = curr_v - prev_v if pd.notna(curr_v) and pd.notna(prev_v) else np.nan
                         dp = (dv / prev_v * 100.0) if pd.notna(dv) and pd.notna(prev_v) and prev_v != 0 else np.nan
                         return pd.Series({"Value": curr_v, "Prev Value": prev_v, "Δ abs": dv, "Δ %": dp})
 
+                    curr["Top1_feat"] = top1_feat
+                    curr["|z| (Top1)"] = top1_val.round(2)
+
+                    # Attach IF decision score
+                    dec_series = pd.Series(decfun, index=idx)
+                    curr["IF score (more − = more anomalous)"] = dec_series.reindex(anom_idx).round(4)
+
+                    # Pull per-row values/deltas for Top1 feature
                     val_blocks = curr.apply(_extract_top_vals, axis=1)
                     curr = pd.concat([curr, val_blocks], axis=1)
 
-                    keep = base_cols + ["IF score (more − = more anomalous)",
-                                        "Top1_feat", "|z| (Top1)", "Value", "Prev Value", "Δ abs", "Δ %"] + \
-                           [f"Top{k}" for k in range(1, int(topk) + 1)]
-                    res = curr[keep].sort_values([c for c in ["Well", "Date"] if c in base_cols])
+                    # Keep tidy columns
+                    keep_cols = base_cols + [
+                        "IF score (more − = more anomalous)",
+                        "Top1_feat", "|z| (Top1)", "Value", "Prev Value", "Δ abs", "Δ %"
+                    ]
+                    if explain:
+                        keep_cols += [f"Top{k}" for k in range(1, int(topk) + 1)]
+                    keep = [c for c in keep_cols if c in curr.columns]
+                    curr = curr[keep]
 
-                    st.subheader("Anomaly table with drivers")
-                    st.dataframe(res, use_container_width=True)
+                    rows.append(curr)
 
                     if show_heatmap:
+                        # Keep a small z-score matrix for this well's anomalies
                         z_disp = z.copy()
-                        # Label rows with Well/Date if possible
-                        if "Well" in res.columns and "Date" in res.columns:
-                            ridx = res.apply(lambda r: f"{r.get('Well','?')} | {pd.to_datetime(r.get('Date')).strftime('%Y-%m-%d') if pd.notna(r.get('Date')) else ''}", axis=1)
-                            z_disp.index = ridx
+                        # Label rows with date (if any) for readability
+                        if "Date" in curr.columns:
+                            ridx = curr["Date"].dt.strftime("%Y-%m-%d").fillna("").astype(str)
+                            z_disp.index = [f"{w} | {r}" for r in ridx]
+                        else:
+                            z_disp.index = [f"{w} | {i}" for i in range(len(z_disp))]
+                        heatmaps.append((w, z_disp))
+
+                if rows:
+                    res = pd.concat(rows).sort_values([c for c in ["Well", "Date"] if c in base_cols])
+                    st.subheader("Anomaly table with drivers")
+                    st.dataframe(res, use_container_width=True)
+                else:
+                    st.success("No anomalies detected with current settings.")
+
+                if show_heatmap and heatmaps:
+                    st.subheader("Feature z-score heatmap (higher |z| ⇒ stronger driver)")
+                    for w, zmat in heatmaps:
                         fig_hm = go.Figure(data=go.Heatmap(
-                            z=z_disp.values, x=z_disp.columns.tolist(), y=z_disp.index.tolist(),
-                            zmid=0, colorbar=dict(title="z-score")
+                            z=zmat.values,
+                            x=zmat.columns.tolist(),
+                            y=zmat.index.tolist(),
+                            zmid=0,
+                            colorbar=dict(title="z-score")
                         ))
                         fig_hm.update_layout(
-                            title="Global anomalies — feature z-scores",
+                            title=f"Well {w} — anomaly feature z-scores",
                             xaxis_title="Feature",
                             yaxis_title="Anomaly (row)"
                         )
                         st.plotly_chart(fig_hm, use_container_width=True)
+
+            else:
+                # All wells combined: single model + global baseline
+                d = df.copy()
+                feat = [c for c in features if c in d.columns]
+                if not feat:
+                    st.info("None of the selected features exist in the dataframe.")
+                else:
+                    idx, labels, decfun, model = run_iforest(d, feat, contamination)
+                    if idx is None:
+                        st.info("Not enough data for anomaly detection.")
+                    else:
+                        anom_pos = np.where(labels == -1)[0]
+                        if len(anom_pos) == 0:
+                            st.success("No anomalies detected with current settings.")
+                        else:
+                            anom_idx = idx[anom_pos]
+                            curr = d.loc[anom_idx, base_cols + feat].copy()
+
+                            # Robust z vs GLOBAL baseline
+                            z = robust_z(curr_df=curr, baseline_df=d, feat=feat)
+                            abs_z = z.abs()
+                            top1_feat = abs_z.idxmax(axis=1)
+                            top1_val = abs_z.max(axis=1)
+
+                            if explain:
+                                topk_list = abs_z.apply(lambda r: list(r.nlargest(int(topk)).items()), axis=1)
+                                for k in range(1, int(topk) + 1):
+                                    curr[f"Top{k}"] = topk_list.apply(
+                                        lambda lst, k=k: (f"{lst[k-1][0]} (|z|={lst[k-1][1]:.2f})" if len(lst) >= k else "")
+                                    )
+
+                            # Previous values by (Well, Date) if present, else simple shift
+                            if "Well" in d.columns and "Date" in d.columns:
+                                d_sorted = d.sort_values(["Well", "Date"]).copy()
+                                prev_all = d_sorted.groupby("Well")[feat].shift(1)
+                                prev_all.index = d_sorted.index
+                                prev_for_anom = prev_all.reindex(anom_idx)
+                            else:
+                                prev_for_anom = d[feat].shift(1).reindex(anom_idx)
+
+                            curr["Top1_feat"] = top1_feat
+                            curr["|z| (Top1)"] = top1_val.round(2)
+                            dec_series = pd.Series(decfun, index=idx)
+                            curr["IF score (more − = more anomalous)"] = dec_series.reindex(anom_idx).round(4)
+
+                            def _extract_top_vals(row):
+                                f = row["Top1_feat"]
+                                curr_v = row.get(f, np.nan)
+                                prev_v = prev_for_anom.loc[row.name, f] if f in prev_for_anom.columns else np.nan
+                                dv = curr_v - prev_v if pd.notna(curr_v) and pd.notna(prev_v) else np.nan
+                                dp = (dv / prev_v * 100.0) if pd.notna(dv) and pd.notna(prev_v) and prev_v != 0 else np.nan
+                                return pd.Series({"Value": curr_v, "Prev Value": prev_v, "Δ abs": dv, "Δ %": dp})
+
+                            val_blocks = curr.apply(_extract_top_vals, axis=1)
+                            curr = pd.concat([curr, val_blocks], axis=1)
+
+                            keep_cols = base_cols + [
+                                "IF score (more − = more anomalous)",
+                                "Top1_feat", "|z| (Top1)", "Value", "Prev Value", "Δ abs", "Δ %"
+                            ]
+                            if explain:
+                                keep_cols += [f"Top{k}" for k in range(1, int(topk) + 1)]
+                            keep = [c for c in keep_cols if c in curr.columns]
+                            res = curr[keep].sort_values([c for c in ["Well", "Date"] if c in base_cols])
+
+                            st.subheader("Anomaly table with drivers")
+                            st.dataframe(res, use_container_width=True)
+
+                            if show_heatmap:
+                                z_disp = z.copy()
+                                # Label rows with Well/Date if possible
+                                if "Well" in res.columns and "Date" in res.columns:
+                                    ridx = res.apply(
+                                        lambda r: f"{r.get('Well','?')} | {pd.to_datetime(r.get('Date')).strftime('%Y-%m-%d') if pd.notna(r.get('Date')) else ''}",
+                                        axis=1
+                                    )
+                                    z_disp.index = ridx
+                                fig_hm = go.Figure(data=go.Heatmap(
+                                    z=z_disp.values,
+                                    x=z_disp.columns.tolist(),
+                                    y=z_disp.index.tolist(),
+                                    zmid=0,
+                                    colorbar=dict(title="z-score")
+                                ))
+                                fig_hm.update_layout(
+                                    title="Global anomalies — feature z-scores",
+                                    xaxis_title="Feature",
+                                    yaxis_title="Anomaly (row)"
+                                )
+                                st.plotly_chart(fig_hm, use_container_width=True)
 
 # ================= Predictive Modeling Tab =================
 with tabs[5]:
@@ -1175,43 +1223,72 @@ with tabs[5]:
     test_size = st.slider("Test size", 0.1, 0.5, 0.2, step=0.05)
     random_state = 42
 
-    if target not in df.columns:
-        st.info(f"Target column '{target}' not found.")
-    elif not features:
-        st.info("Select at least one feature.")
+    # New: trigger training only on button click
+    run_model = st.button("Train / evaluate model", type="primary")
+
+    if not run_model:
+        st.info("Select features and parameters, then click **Train / evaluate model**.")
     else:
-        data_cols = ["Well","Date", target] + features
-        data = df[data_cols].dropna().copy()
-        if len(data) < 30:
-            st.info("Not enough complete rows to train (need ≥ 30). Try selecting fewer features or cleaning data.")
+        if target not in df.columns:
+            st.info(f"Target column '{target}' not found.")
+        elif not features:
+            st.info("Select at least one feature.")
         else:
-            X = data[features].values
-            y = data[target].values
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
-            model = RandomForestRegressor(n_estimators=400, random_state=random_state, n_jobs=-1) if model_type == "Random Forest" else LinearRegression()
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))  # works on all versions
-            r2   = r2_score(y_test, y_pred)
+            data_cols = ["Well","Date", target] + features
+            data = df[data_cols].dropna().copy()
+            if len(data) < 30:
+                st.info("Not enough complete rows to train (need ≥ 30). Try selecting fewer features or cleaning data.")
+            else:
+                X = data[features].values
+                y = data[target].values
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y, test_size=test_size, random_state=random_state
+                )
 
-            col1, col2 = st.columns(2)
-            with col1: st.metric("RMSE (bopd)", f"{rmse:,.2f}")
-            with col2: st.metric("R²", f"{r2:,.3f}")
+                if model_type == "Random Forest":
+                    # Lighter RF to reduce load
+                    model = RandomForestRegressor(
+                        n_estimators=200,
+                        random_state=random_state,
+                        n_jobs=-1
+                    )
+                else:
+                    model = LinearRegression()
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                rmse = rmse_score(y_test, y_pred)
+                r2   = r2_score(y_test, y_pred)
 
-            plot_df = pd.DataFrame({"Actual": y_test, "Predicted": y_pred})
-            fig = px.scatter(plot_df, x="Actual", y="Predicted", trendline="ols", title="Predicted vs Actual (Test Set)")
-            safe_download_buttons_for_fig(fig, "predicted_vs_actual", "pm_pva")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("RMSE (bopd)", f"{rmse:,.2f}")
+                with col2:
+                    st.metric("R²", f"{r2:,.3f}")
 
-            if model_type == "Random Forest":
-                importances = pd.DataFrame({"Feature": features, "Importance": model.feature_importances_}).sort_values("Importance", ascending=False)
-                fig_imp = px.bar(importances, x="Feature", y="Importance", title="Feature Importances (Random Forest)")
-                safe_download_buttons_for_fig(fig_imp, "feature_importances", "pm_imp")
+                plot_df = pd.DataFrame({"Actual": y_test, "Predicted": y_pred})
+                fig = px.scatter(
+                    plot_df,
+                    x="Actual",
+                    y="Predicted",
+                    trendline="ols",
+                    title="Predicted vs Actual (Test Set)"
+                )
+                safe_download_buttons_for_fig(fig, "predicted_vs_actual", "pm_pva")
+
+                if model_type == "Random Forest":
+                    importances = pd.DataFrame({
+                        "Feature": features,
+                        "Importance": model.feature_importances_
+                    }).sort_values("Importance", ascending=False)
+                    fig_imp = px.bar(
+                        importances,
+                        x="Feature",
+                        y="Importance",
+                        title="Feature Importances (Random Forest)"
+                    )
+                    safe_download_buttons_for_fig(fig_imp, "feature_importances", "pm_imp")
 
 # =========================
 # Footer
 # =========================
 st.caption("Credit: Radya Evandhika Novaldi - Jr. Engineer Petroleum")
-
-
-
-
